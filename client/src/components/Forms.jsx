@@ -69,9 +69,8 @@ export function NoteField({ value, onSave }) {
   useEffect(() => { if (editing) setDraft(value || ""); }, [editing, value]);
   return (
     <div style={{ marginBottom: "1.25rem" }}>
-      <div style={{ color: "var(--tx4)", fontSize: "0.7rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.4rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ color: "var(--tx4)", fontSize: "0.7rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.4rem" }}>
         Notes
-        {!editing && <button onClick={() => setEditing(true)} style={{ ...btnGhost, padding: "0.1rem 0.45rem", fontSize: "0.65rem", color: "var(--tx5)" }}>✎ Edit</button>}
       </div>
       {editing ? (
         <div>
@@ -138,10 +137,37 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
   const subPresets = SUB_STRATEGY_PRESETS[d.strategy] || [];
   const fi = (v) => v ? ISFilled : IS;
+  const sec = (label, color, mt = "1.25rem") => (
+    <div style={{ gridColumn: "span 2", display: "flex", alignItems: "center", gap: "0.6rem", marginTop: mt, marginBottom: "0.1rem" }}>
+      <div style={{ width: "3px", height: "14px", background: color, borderRadius: "2px", flexShrink: 0 }} />
+      <span style={{ color: "var(--tx2)", fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
+      <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+    </div>
+  );
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
+
+      {/* ── Identity ── */}
+      {sec("Identity", "#8b5cf6", "0")}
       <Field label="Fund Name"><input style={fi(d.name)} value={d.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Fund IX" /></Field>
       <Field label="Fund Series" half><input style={fi(d.series)} value={d.series} onChange={e => set("series", e.target.value)} placeholder="e.g. Blackstone Capital Partners" /></Field>
+      <Field label="Status" half>
+        <select style={ISFilled} value={d.status} onChange={e => set("status", e.target.value)}>
+          {["Pre-Marketing","Fundraising","Closed","Deployed","Monitoring","Exiting"].map(s => <option key={s}>{s}</option>)}
+        </select>
+      </Field>
+      <Field label="Fund Score" half>
+        <select style={ISFilled} value={d.score} onChange={e => set("score", e.target.value)}>
+          {Object.entries(SCORE_CONFIG).map(([k, v]) => <option key={k} value={k}>{k} — {v.desc}</option>)}
+        </select>
+      </Field>
+      <Field label={`Responsible${gpOwner && !d.owner ? ` (${gpOwner} from GP)` : ""}`} half>
+        <input style={fi(d.owner)} value={d.owner || ""} onChange={e => set("owner", e.target.value)} placeholder={gpOwner || "Team member"} list="fund-owners-list" autoComplete="off" />
+        <datalist id="fund-owners-list">{owners.map(o => <option key={o} value={o} />)}</datalist>
+      </Field>
+
+      {/* ── Asset Class ── */}
+      {sec("Asset Class", "#f59e0b")}
       <Field label="Strategy" half>
         <select style={ISFilled} value={d.strategy} onChange={e => { set("strategy", e.target.value); set("subStrategy", ""); }}>
           {STRATEGY_OPTIONS.map(s => <option key={s}>{s}</option>)}
@@ -154,54 +180,44 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
         </select>
       </Field>
       <Field label="Sector Focus"><TagPicker selected={d.sectors || []} options={SECTOR_OPTIONS} onChange={v => set("sectors", v)} /></Field>
+
+      {/* ── Fundraising ── */}
+      {sec("Fundraising", "#3b82f6")}
+      <Field label="Target Size (M)" half><input style={fi(d.targetSize)} value={d.targetSize} onChange={e => set("targetSize", e.target.value)} placeholder="10,000" /></Field>
+      <Field label="Hard Cap (M)" half><input style={fi(d.hardCap)} value={d.hardCap || ""} onChange={e => set("hardCap", e.target.value)} placeholder="20,000" /></Field>
+      <Field label="Amount Raised (M)" half><input style={fi(d.raisedSize)} value={d.raisedSize} onChange={e => set("raisedSize", e.target.value)} placeholder="7,500" /></Field>
+      <Field label="Raised As Of Date" half><input type="date" style={fi(d.raisedDate)} value={d.raisedDate || ""} onChange={e => set("raisedDate", e.target.value)} /></Field>
+      <Field label="Final Fund Size (M)" half><input style={fi(d.finalSize)} value={d.finalSize} onChange={e => set("finalSize", e.target.value)} placeholder="If closed" /></Field>
+      <Field label="Launch Date (exp)" half><input type="date" style={fi(d.launchDate)} value={d.launchDate || ""} onChange={e => set("launchDate", e.target.value)} /></Field>
+      <Field label="First Close Date" half><input type="date" style={fi(d.firstCloseDate)} value={d.firstCloseDate || ""} onChange={e => set("firstCloseDate", e.target.value)} /></Field>
+      <Field label="Next Close Date" half><input type="date" style={fi(d.nextCloseDate)} value={d.nextCloseDate || ""} onChange={e => set("nextCloseDate", e.target.value)} /></Field>
+      <Field label="Final Close Date" half><input type="date" style={fi(d.finalCloseDate)} value={d.finalCloseDate || ""} onChange={e => set("finalCloseDate", e.target.value)} /></Field>
+
+      {/* ── Fund Details ── */}
+      {sec("Fund Details", "#64748b")}
       <Field label="Vintage Year" half><input style={fi(d.vintage)} value={d.vintage} onChange={e => set("vintage", e.target.value)} placeholder="2024" /></Field>
       <Field label="Currency" half>
         <select style={ISFilled} value={d.currency} onChange={e => set("currency", e.target.value)}>
           {CURRENCIES.map(c => <option key={c}>{c}</option>)}
         </select>
       </Field>
-      <Field label="Target Size (M)" half><input style={fi(d.targetSize)} value={d.targetSize} onChange={e => set("targetSize", e.target.value)} placeholder="10,000" /></Field>
-      <Field label="Amount Raised (M)" half><input style={fi(d.raisedSize)} value={d.raisedSize} onChange={e => set("raisedSize", e.target.value)} placeholder="7,500" /></Field>
-      <Field label="Raised As Of Date" half><input type="date" style={fi(d.raisedDate)} value={d.raisedDate || ""} onChange={e => set("raisedDate", e.target.value)} /></Field>
-      <Field label="Final Fund Size (M)" half><input style={fi(d.finalSize)} value={d.finalSize} onChange={e => set("finalSize", e.target.value)} placeholder="If closed" /></Field>
-      <Field label="Hard Cap (M)" half><input style={fi(d.hardCap)} value={d.hardCap || ""} onChange={e => set("hardCap", e.target.value)} placeholder="20,000" /></Field>
-      <Field label="Launch Date (exp)" half><input type="date" style={fi(d.launchDate)} value={d.launchDate || ""} onChange={e => set("launchDate", e.target.value)} /></Field>
-      <Field label="First Close Date" half><input type="date" style={fi(d.firstCloseDate)} value={d.firstCloseDate || ""} onChange={e => set("firstCloseDate", e.target.value)} /></Field>
-      <Field label="Next Close Date" half><input type="date" style={fi(d.nextCloseDate)} value={d.nextCloseDate || ""} onChange={e => set("nextCloseDate", e.target.value)} /></Field>
-      <Field label="Final Close Date" half><input type="date" style={fi(d.finalCloseDate)} value={d.finalCloseDate || ""} onChange={e => set("finalCloseDate", e.target.value)} /></Field>
-      <Field label="Status" half>
-        <select style={ISFilled} value={d.status} onChange={e => set("status", e.target.value)}>
-          {["Pre-Marketing","Fundraising","Closed","Deployed","Monitoring","Exiting"].map(s => <option key={s}>{s}</option>)}
-        </select>
-      </Field>
       <Field label="Next Expected in Market" half><input style={fi(d.nextMarket)} value={d.nextMarket} onChange={e => set("nextMarket", e.target.value)} placeholder="2027-Q2" /></Field>
-      <Field label="Fund Score" half>
-        <select style={ISFilled} value={d.score} onChange={e => set("score", e.target.value)}>
-          {Object.entries(SCORE_CONFIG).map(([k, v]) => <option key={k} value={k}>{k} — {v.desc}</option>)}
-        </select>
-      </Field>
-      <Field label={`Responsible${gpOwner && !d.owner ? ` (${gpOwner} from GP)` : ""}`} half>
-        <input style={fi(d.owner)} value={d.owner || ""} onChange={e => set("owner", e.target.value)} placeholder={gpOwner || "Team member"} list="fund-owners-list" autoComplete="off" />
-        <datalist id="fund-owners-list">{owners.map(o => <option key={o} value={o} />)}</datalist>
-      </Field>
+
+      {/* ── Commitment ── */}
+      {sec("Commitment", "#22c55e")}
       <div style={{ gridColumn: "span 2", background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1rem", marginBottom: "0.9rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: d.invested ? "0.75rem" : 0 }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", color: "var(--tx2)", fontSize: "0.875rem" }}>
-            <input type="checkbox" checked={d.invested} onChange={e => set("invested", e.target.checked)} style={{ width: "15px", height: "15px", accentColor: "#22c55e" }} />
-            We have invested in this fund
-          </label>
-        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", color: "var(--tx2)", fontSize: "0.875rem" }}>
+          <input type="checkbox" checked={d.invested} onChange={e => set("invested", e.target.checked)} style={{ width: "15px", height: "15px", accentColor: "#22c55e" }} />
+          We have invested in this fund
+        </label>
         {d.invested && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem", marginTop: "0.75rem" }}>
-            <Field label="Investment Amount (M)" half><input style={fi(d.investmentAmount)} value={d.investmentAmount} onChange={e => set("investmentAmount", e.target.value)} placeholder="50" /></Field>
-            <Field label="Investment Currency" half>
-              <select style={ISFilled} value={d.investmentCurrency} onChange={e => set("investmentCurrency", e.target.value)}>
-                {CURRENCIES.map(c => <option key={c}>{c}</option>)}
-              </select>
-            </Field>
+          <div style={{ marginTop: "0.75rem" }}>
+            <label style={{ display: "block", color: "var(--tx3)", fontSize: "0.7rem", fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: "0.35rem" }}>Investment Amount (M)</label>
+            <input style={fi(d.investmentAmount)} value={d.investmentAmount} onChange={e => set("investmentAmount", e.target.value)} placeholder="50" />
           </div>
         )}
       </div>
+
       <Field label="Notes"><textarea style={d.notes ? TAFilled : TA} value={d.notes} onChange={e => set("notes", e.target.value)} placeholder="Investment thesis, concerns, key terms…" /></Field>
       <div style={{ gridColumn: "span 2", display: "flex", gap: "0.75rem", justifyContent: "space-between", paddingTop: "0.5rem", alignItems: "center" }}>
         {onDelete && (

@@ -10,17 +10,14 @@ export function Overlay({ onClose, children, width = "680px", zIndex = 1000 }) {
     </div>
   );
 }
-export function OverlayHeader({ title, subtitle, onClose, actions }) {
+export function OverlayHeader({ title, subtitle, actions }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "1.5rem 1.5rem 1rem", borderBottom: "1px solid var(--border)" }}>
       <div>
         <h2 style={{ margin: 0, color: "var(--tx1)", fontSize: "1.15rem", fontWeight: 700 }}>{title}</h2>
         {subtitle && <div style={{ color: "var(--tx3)", fontSize: "0.8125rem", marginTop: "0.25rem" }}>{subtitle}</div>}
       </div>
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-        {actions}
-        <button onClick={onClose} style={{ background: "none", border: "1px solid var(--border-hi)", borderRadius: "6px", color: "var(--tx3)", cursor: "pointer", fontSize: "1rem", width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-      </div>
+      {actions && <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>{actions}</div>}
     </div>
   );
 }

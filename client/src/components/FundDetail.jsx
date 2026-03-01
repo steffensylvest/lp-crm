@@ -260,14 +260,15 @@ function FundraisingTimeline({ fund, onSetDate }) {
 }
 
 // ─── Dual-field metric card (e.g. "18.5% / 2.0x") ───────────────────────────
-function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, onSave2 }) {
+function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, onSave2, readOnly }) {
   const { editingId, setEditingId } = React.useContext(EditingContext);
   const [tmp1, setTmp1] = useState(val1 || "");
   const [tmp2, setTmp2] = useState(val2 || "");
   const containerRef = useRef();
-  const isEditing = editingId === id;
+  const isEditing = !readOnly && editingId === id;
 
   const startEdit = () => {
+    if (readOnly) return;
     setTmp1(val1 || ""); setTmp2(val2 || "");
     setEditingId(id);
   };
@@ -276,15 +277,15 @@ function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, on
 
   return (
     <div ref={containerRef}
-      onClick={!isEditing ? startEdit : undefined}
+      onClick={!isEditing && !readOnly ? startEdit : undefined}
       onBlur={isEditing ? () => {
         setTimeout(() => {
           if (containerRef.current && !containerRef.current.contains(document.activeElement)) commit();
         }, 0);
       } : undefined}
-      style={{ background: "var(--card)", border: `1px solid ${isEditing ? "var(--border-hi)" : "var(--border)"}`, borderRadius: "8px", padding: "0.7rem 0.85rem", cursor: isEditing ? "default" : "pointer", transition: "border-color 0.15s" }}
-      onMouseEnter={!isEditing ? e => e.currentTarget.style.borderColor = "var(--border-hi)" : undefined}
-      onMouseLeave={!isEditing ? e => e.currentTarget.style.borderColor = "var(--border)" : undefined}
+      style={{ background: "var(--card)", border: `1px solid ${isEditing ? "var(--border-hi)" : "var(--border)"}`, borderRadius: "8px", padding: "0.7rem 0.85rem", cursor: (isEditing || readOnly) ? "default" : "pointer", transition: "border-color 0.15s" }}
+      onMouseEnter={(!isEditing && !readOnly) ? e => e.currentTarget.style.borderColor = "var(--border-hi)" : undefined}
+      onMouseLeave={(!isEditing && !readOnly) ? e => e.currentTarget.style.borderColor = "var(--border)" : undefined}
     >
       <div style={{ color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "0.35rem" }}>{label}</div>
       {isEditing ? (
@@ -315,6 +316,21 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
   const [editingId, setEditingId] = useState(null);
   const [fundraisingExpanded, setFundraisingExpanded] = useState(null); // null = auto
   const [tab, setTab] = useState("overview");
+  const [showCommitment, setShowCommitment] = useState(!!(fund.expectedAmount || fund.icDate));
+
+  // Reset commitment visibility when switching funds
+  useEffect(() => { setShowCommitment(!!(fund.expectedAmount || fund.icDate)); }, [fund.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Intercept Escape in capture phase when the Edit All form is open,
+  // so App's global handler doesn't close the whole fund overlay.
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); setEditing(false); }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [editing]);
 
   // ── History state ──────────────────────────────────────────────────────────
   const [perfHistory,   setPerfHistory]   = useState([]);
@@ -378,11 +394,12 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
   }
 
   const totalHistory = changeHistory.length + perfHistory.length + raisedHistory.length;
-  const sectionHeader = (label, color) => (
+  const sectionHeader = (label, color, action) => (
     <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.75rem" }}>
       <div style={{ width: "3px", height: "15px", background: color, borderRadius: "2px", flexShrink: 0 }} />
       <span style={{ color: "var(--tx2)", fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
       <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+      {action}
     </div>
   );
 
@@ -401,7 +418,12 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
           </>
         ) : fund.series}
         onClose={onClose}
-        actions={<button onClick={() => setEditing(true)} style={btnGhost}>Edit All</button>}
+        actions={fund.strategy && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
+            <StrategyPicker strategy={fund.strategy} onChange={v => patch({ strategy: v, subStrategy: null })} />
+            <SubStrategyPicker strategy={fund.strategy} subStrategy={fund.subStrategy} onChange={v => patch({ subStrategy: v })} />
+          </div>
+        )}
       />
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 1.5rem" }}>
@@ -585,50 +607,30 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
                 <div><div style={lbl}>Pipeline</div><StagePicker stage={currentStage} onChange={v => onPipelineStage?.(fund.id, v)} /></div>
                 <div><div style={lbl}>Status</div><StatusPicker status={fund.status} onChange={v => patch({ status: v })} /></div>
               </div>
-              {/* Asset Class + Sector Focus row */}
-              <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", marginBottom: "1.25rem" }}>
-                <div style={{ flexShrink: 0 }}>
-                  <div style={lbl}>Asset Class</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                    <StrategyPicker strategy={fund.strategy} onChange={v => patch({ strategy: v, subStrategy: null })} />
-                    <SubStrategyPicker strategy={fund.strategy} subStrategy={fund.subStrategy} onChange={v => patch({ subStrategy: v })} />
-                  </div>
-                </div>
-                {fund.sectors?.length > 0 && (
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={lbl}>Sector Focus</div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                      {fund.sectors.map(s => <SectorChip key={s} label={s} onClick={() => onTagClick && onTagClick("sector", s)} />)}
-                    </div>
-                  </div>
-                )}
-              </div>
             </>
           );
         })()}
 
-        {/* Fundraising section — collapsible when not actively fundraising */}
+        {/* Fundraising section */}
         <div style={{ marginBottom: "1.25rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showFundraising ? "0.6rem" : 0 }}>
-            <div style={{ color: "var(--tx4)", fontSize: "0.7rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Fundraising</div>
-            {!isFundraising && (
-              <button
-                onClick={() => setFundraisingExpanded(!showFundraising)}
-                style={{ ...btnGhost, padding: "0.1rem 0.45rem", fontSize: "0.65rem", color: "var(--tx5)" }}
-              >
-                {showFundraising ? "▲ Hide" : "▼ Show"}
-              </button>
-            )}
-          </div>
+          {sectionHeader("Fundraising", "#3b82f6",
+            <button onClick={() => setFundraisingExpanded(!showFundraising)}
+              style={{ ...btnGhost, padding: "0.1rem 0.45rem", fontSize: "0.65rem", color: "var(--tx5)" }}>
+              {showFundraising ? "▲ Hide" : "▼ Show"}
+            </button>
+          )}
           {showFundraising && (
             <div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
-                <InlineMetric id="raisedSize" label="Amount Raised (M)" value={fund.raisedSize}
-                  displayValue={fund.raisedSize ? `${fmtM(fund.raisedSize, fund.currency)}${fund.raisedDate ? ` · ${fmt(fund.raisedDate)}` : ""}` : null}
-                  placeholder="18000" onSave={v => patch({ raisedSize: v })} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                <InlineMetric id="targetSize" label="Target Size (M)" value={fund.targetSize}
+                  displayValue={fmtM(fund.targetSize, fund.currency)}
+                  placeholder="—" onSave={v => patch({ targetSize: v })} />
                 <InlineMetric id="hardCap" label="Hard Cap (M)" value={fund.hardCap}
                   displayValue={fmtM(fund.hardCap, fund.currency)}
                   placeholder="—" onSave={v => patch({ hardCap: v })} />
+                <InlineMetric id="raisedSize" label="Amount Raised (M)" value={fund.raisedSize}
+                  displayValue={fund.raisedSize ? `${fmtM(fund.raisedSize, fund.currency)}${fund.raisedDate ? ` · ${fmt(fund.raisedDate)}` : ""}` : null}
+                  placeholder="—" onSave={v => patch({ raisedSize: v })} />
               </div>
               {pct !== null && (
                 <div style={{ marginBottom: "0.75rem" }}>
@@ -642,41 +644,54 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
                 </div>
               )}
               <FundraisingTimeline fund={fund} onSetDate={(field, val) => patch({ [field]: val || null })} />
+              {/* Commitment / IC — only shown when planning to invest */}
+              <div style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer", marginBottom: showCommitment ? "0.6rem" : 0 }}>
+                  <input type="checkbox" checked={showCommitment} onChange={e => setShowCommitment(e.target.checked)}
+                    style={{ width: "13px", height: "13px", cursor: "pointer", accentColor: "var(--tx1)" }} />
+                  <span style={{ color: "var(--tx3)", fontSize: "0.74rem", fontWeight: 500 }}>Planning to invest</span>
+                </label>
+                {showCommitment && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem" }}>
+                    <InlineMetric id="expectedAmount" label="Expected Commitment (M)" value={fund.expectedAmount}
+                      displayValue={fmtM(fund.expectedAmount, fund.currency)}
+                      placeholder="—" onSave={v => patch({ expectedAmount: v })} />
+                    <InlineMetric id="icDate" label="IC Date" value={fund.icDate}
+                      displayValue={fmt(fund.icDate)} placeholder="YYYY-MM-DD" onSave={v => patch({ icDate: v || null })} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Inline-editable metric cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.75rem", marginBottom: "1.25rem" }}>
+        {/* Fund Details section */}
+        {sectionHeader("Fund Details", "#64748b", <button onClick={() => setEditing(true)} style={{ ...btnGhost, padding: "0.1rem 0.45rem", fontSize: "0.65rem", color: "var(--tx5)" }}>Edit All</button>)}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.75rem", marginBottom: "0.75rem" }}>
           <InlineMetric id="vintage" label="Vintage" value={fund.vintage} placeholder="2024" onSave={v => patch({ vintage: v })} />
           <InlineMetric id="currency" label="Currency" value={fund.currency} placeholder="USD" onSave={v => patch({ currency: v })} />
-          <InlineMetric id="targetSize" label="Target Size (M)" value={fund.targetSize}
-            displayValue={fmtM(fund.targetSize, fund.currency)}
-            placeholder="25000" onSave={v => patch({ targetSize: v })} />
+          <InlineMetric id="fundSize" label="Fund Size (M)"
+            value={fund.finalSize || fund.targetSize}
+            displayValue={fmtM(fund.finalSize || fund.targetSize, fund.currency)}
+            placeholder="—" onSave={v => patch({ finalSize: v })} />
           <DualMetric id="net-perf" label="Net Returns"
             val1={fund.netIrr}  disp1={fund.netIrr  ? `${parseFloat(fund.netIrr).toFixed(1)}%`  : null} ph1="Net IRR"
             val2={fund.netMoic} disp2={fund.netMoic ? `${parseFloat(fund.netMoic).toFixed(2)}x` : null} ph2="MOIC"
-            onSave1={v => patch({ netIrr: v || null })} onSave2={v => patch({ netMoic: v || null })} />
+            onSave1={v => patch({ netIrr: v || null })} onSave2={v => patch({ netMoic: v || null })} readOnly />
           <DualMetric id="gross-perf" label="Gross Returns"
             val1={fund.grossIrr}  disp1={fund.grossIrr  ? `${parseFloat(fund.grossIrr).toFixed(1)}%`  : null} ph1="Gross IRR"
             val2={fund.grossMoic} disp2={fund.grossMoic ? `${parseFloat(fund.grossMoic).toFixed(2)}x` : null} ph2="MOIC"
-            onSave1={v => patch({ grossIrr: v || null })} onSave2={v => patch({ grossMoic: v || null })} />
-          <InlineMetric id="finalSize" label="Final Size (M)" value={fund.finalSize}
-            displayValue={fmtM(fund.finalSize, fund.currency)}
-            placeholder="If closed" onSave={v => patch({ finalSize: v })} />
+            onSave1={v => patch({ grossIrr: v || null })} onSave2={v => patch({ grossMoic: v || null })} readOnly />
           <InlineMetric id="nextMarket" label="Next in Market" value={fund.nextMarket} placeholder="2027-Q2" onSave={v => patch({ nextMarket: v })} />
         </div>
-
-        {/* LP Commitment — expected size, currency, IC date */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 150px", gap: "0.75rem", marginBottom: "1.25rem" }}>
-          <InlineMetric id="expectedAmount" label="Expected Commitment (M)" value={fund.expectedAmount}
-            displayValue={fmtM(fund.expectedAmount, fund.expectedCurrency || fund.currency)}
-            placeholder="—" onSave={v => patch({ expectedAmount: v })} />
-          <InlineMetric id="expectedCurrency" label="Commit. Currency" value={fund.expectedCurrency}
-            placeholder={fund.currency || "USD"} onSave={v => patch({ expectedCurrency: v })} />
-          <InlineMetric id="icDate" label="IC Date" value={fund.icDate}
-            displayValue={fmt(fund.icDate)} placeholder="YYYY-MM-DD" onSave={v => patch({ icDate: v || null })} />
-        </div>
+        {fund.sectors?.length > 0 && (
+          <div style={{ marginBottom: "1.25rem" }}>
+            <div style={{ color: "var(--tx4)", fontSize: "0.68rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.3rem" }}>Sectors</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+              {fund.sectors.map(s => <SectorChip key={s} label={s} onClick={() => onTagClick && onTagClick("sector", s)} />)}
+            </div>
+          </div>
+        )}
 
         {/* Investment */}
         {fund.invested && (
@@ -686,12 +701,11 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
               <div style={{ color: "var(--invested-c)", fontWeight: 600, fontSize: "0.875rem" }}>
                 Invested{fund.icDate ? ` · IC ${fmt(fund.icDate)}` : ""}
               </div>
-              {fund.investmentAmount && <div style={{ color: "var(--invested-c)", fontSize: "0.8125rem", opacity: 0.8 }}>{fund.investmentCurrency} {Number(fund.investmentAmount).toLocaleString()}M commitment</div>}
+              {fund.investmentAmount && <div style={{ color: "var(--invested-c)", fontSize: "0.8125rem", opacity: 0.8 }}>{Number(fund.investmentAmount).toLocaleString()}M commitment</div>}
             </div>
           </div>
         )}
 
-        {/* Notes — inline editable textarea */}
         <NoteField value={fund.notes} onSave={v => patch({ notes: v })} />
 
         {/* Meetings */}
