@@ -1,0 +1,8 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+python-dotenv==1.0.1
+
+# ── Snowflake (uncomment when your account is ready) ──────────────────────────
+# snowflake-sqlalchemy==1.6.1
+# snowflake-connector-python==3.12.3

@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Build output
+client/dist/
+
+# Python
+python-server/.env
+python-server/lp_crm.db
+python-server/__pycache__/
+python-server/*.pyc
+python-server/*.pyo
+python-server/.venv/
+python-server/venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
