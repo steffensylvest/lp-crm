@@ -17,6 +17,9 @@ import { DashboardView } from './components/DashboardView.jsx';
 import { GlobalSearch } from './components/GlobalSearch.jsx';
 import { SmartAddModal, DataMenu, StatCard } from './components/SmartAdd.jsx';
 import { GPForm, MeetingForm } from './components/Forms.jsx';
+import { SettingsContext } from './settingsContext.js';
+import { SettingsView } from './components/SettingsView.jsx';
+import { PlacementAgentDetailOverlay } from './components/PlacementAgentDetail.jsx';
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -43,10 +46,18 @@ export default function App() {
   const [gpOverlay, setGpOverlay] = useState(null);    // gp object
   const [fundOverlay, setFundOverlay] = useState(null); // { fund, gp }
   const [meetingOverlay, setMeetingOverlay] = useState(null); // { meeting, gp }
+  const [paOverlay, setPaOverlay] = useState(null);     // placement agent object
   const [showAddNew, setShowAddNew] = useState(false); // replaces showAddGP
   const [showAddGP, setShowAddGP] = useState(false);
   const [logMeeting, setLogMeeting] = useState(null); // { gp, fundId? } — app-level meeting logger
   const [editMeeting, setEditMeeting] = useState(null); // { gp, meeting } — edit existing meeting
+
+  // Z-index stack — tracks which modal opened last so it's always on top
+  const [modalZs, setModalZs] = useState({});
+  const zSeq = useRef(1000);
+  const openModal  = (name) => { zSeq.current += 500; setModalZs(prev => ({ ...prev, [name]: zSeq.current })); };
+  const closeModal = (name) => { setModalZs(prev => { const n = { ...prev }; delete n[name]; return n; }); };
+  const zOf = (name) => modalZs[name] ?? 1000;
 
   const searchRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -65,6 +76,7 @@ export default function App() {
         meetings: (g.meetings || []).map(m => ({ ...m, gpId: g.id })),
       })),
       pipeline: data.pipeline,
+      settings: data.settings,
     };
     // Use data URI — works in sandboxed iframes where createObjectURL may not
     const json = JSON.stringify(exportPayload, null, 2);
@@ -134,16 +146,22 @@ export default function App() {
           // The InlineMetric's own onKeyDown will cancel — don't do anything else
           return;
         }
-        // Close strictly from top of stack downward — never skip a layer
-        // Overlays close before GlobalSearch (so search re-appears on Esc from overlay)
-        if (showAddGP) { setShowAddGP(false); return; }
-        if (showAddNew) { setShowAddNew(false); return; }
-        if (editMeeting) { setEditMeeting(null); return; }
-        if (logMeeting) { setLogMeeting(null); return; }
-        if (meetingOverlay) { setMeetingOverlay(null); return; }
-        if (fundOverlay) { setFundOverlay(null); return; }
-        if (gpOverlay) { setGpOverlay(null); return; }
-        if (showSearch) { setShowSearch(false); setSearchQuery(""); return; }
+        // Close whatever is topmost in the z-index stack
+        const _entries = Object.entries(modalZs).filter(([,z]) => z > 0).sort(([,a],[,b]) => b - a);
+        const _top = _entries[0]?.[0];
+        if (_top) {
+          setModalZs(prev => { const n = { ...prev }; delete n[_top]; return n; });
+          if (_top === 'search')      { setShowSearch(false); setSearchQuery(""); }
+          else if (_top === 'gp')         { setGpOverlay(null); }
+          else if (_top === 'fund')        { setFundOverlay(null); fundInlineEditingRef.current = false; }
+          else if (_top === 'meeting')     { setMeetingOverlay(null); }
+          else if (_top === 'pa')          { setPaOverlay(null); }
+          else if (_top === 'logMeeting')  { setLogMeeting(null); }
+          else if (_top === 'editMeeting') { setEditMeeting(null); }
+          else if (_top === 'addNew')      { setShowAddNew(false); }
+          else if (_top === 'addGP')       { setShowAddGP(false); }
+          return;
+        }
         if (view !== "home") {
           setView(view === "tagFilter" ? (prevView || "home") : "home");
         }
@@ -154,7 +172,7 @@ export default function App() {
         const typing = tag === "input" || tag === "textarea" || tag === "select";
         if (typing) return;
         e.preventDefault();
-        setShowSearch(true);
+        setShowSearch(true); openModal('search');
       }
 
       if (e.key === "*") {
@@ -175,11 +193,28 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showSearch, showAddGP, showAddNew, editMeeting, logMeeting, meetingOverlay, fundOverlay, gpOverlay, view, prevView]);
+  }, [modalZs, showSearch, showAddGP, showAddNew, editMeeting, logMeeting, paOverlay, meetingOverlay, fundOverlay, gpOverlay, view, prevView]);
 
   const setGPs = useCallback((fn) => setData(d => ({ ...d, gps: typeof fn === "function" ? fn(d.gps) : fn })), []);
   const setPipeline = useCallback((fn) => setData(d => ({ ...d, pipeline: typeof fn === "function" ? fn(d.pipeline) : fn })), []);
   const setTodos = useCallback((fn) => setData(d => ({ ...d, todos: typeof fn === "function" ? fn(d.todos || []) : fn })), []);
+  const setPAs = useCallback((fn) => setData(d => ({ ...d, placementAgents: typeof fn === "function" ? fn(d.placementAgents || []) : fn })), []);
+
+  const updatePA = useCallback((updated) => {
+    if (updated.__addFund) {
+      // Associate a fund with this PA
+      const fundId = updated.__addFund;
+      setGPs(gps => gps.map(g => ({ ...g, funds: (g.funds || []).map(f => f.id === fundId ? { ...f, placementAgentId: updated.id ?? paOverlay?.id } : f) })));
+      return;
+    }
+    if (updated.__removeFund) {
+      const fundId = updated.__removeFund;
+      setGPs(gps => gps.map(g => ({ ...g, funds: (g.funds || []).map(f => f.id === fundId ? { ...f, placementAgentId: null } : f) })));
+      return;
+    }
+    setPAs(pas => pas.map(p => p.id === updated.id ? updated : p));
+    if (paOverlay?.id === updated.id) setPaOverlay(updated);
+  }, [paOverlay, setGPs, setPAs]);
 
   const handleAddTodo = useCallback((todoData) => {
     setTodos(ts => [...ts, { ...todoData, id: uid(), done: false, createdAt: now() }]);
@@ -215,7 +250,7 @@ export default function App() {
 
   if (!data) return <div style={{ ...theme, background: "var(--bg)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--tx3)", fontFamily: "system-ui" }}>Loading…</div>;
 
-  const { gps, pipeline, todos = [] } = data;
+  const { gps, pipeline, todos = [], settings = {}, placementAgents = [] } = data;
   const allFunds = gps.flatMap(g => g.funds || []);
   const allMeetings = gps.flatMap(g => g.meetings || []);
   const fundraising = allFunds.filter(f => f.status === "Fundraising").length;
@@ -224,11 +259,13 @@ export default function App() {
   const allOwners = [...new Set([
     ...gps.map(g => g.owner).filter(Boolean),
     ...allFunds.map(f => f.owner).filter(Boolean),
+    ...(settings.people ?? []),
   ])].sort();
 
-  const handleTagClick = (type, value) => { setPrevView(view); setTagFilter({ type, value }); setView("tagFilter"); if (fundOverlay) setFundOverlay(null); if (gpOverlay) setGpOverlay(null); };
-  const handleFundClick = (fund, gp) => { setFundOverlay({ fund, gp }); };
-  const handleMeetingClick = (meeting, gp) => { setMeetingOverlay({ meeting, gp }); };
+  const handleTagClick = (type, value) => { setPrevView(view); setTagFilter({ type, value }); setView("tagFilter"); if (fundOverlay) { setFundOverlay(null); closeModal('fund'); } if (gpOverlay) { setGpOverlay(null); closeModal('gp'); } };
+  const handleFundClick    = (fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); };
+  const handleMeetingClick = (meeting, gp) => { setMeetingOverlay({ meeting, gp }); openModal('meeting'); };
+  const handleGpClick      = (gp) => { setGpOverlay(gp); openModal('gp'); };
   const goHome = () => { setView("home"); };
 
   // ─── Universal search across all entities ─────────────────────────────────
@@ -262,11 +299,34 @@ export default function App() {
       (stratF.length === 0 || (g.funds||[]).some(f => stratF.includes(f.strategy))) &&
       (statusF.length === 0 || (g.funds||[]).some(f => statusF.includes(f.status))) &&
       (ownerF.length === 0 || ownerF.includes(g.owner) || (g.funds||[]).some(f => ownerF.includes(f.owner || g.owner)));
-  }).sort((a,b) => { const o={A:0,B:1,C:2,D:3,E:4}; return (o[a.score]??2)-(o[b.score]??2)||a.name.localeCompare(b.name); });
+  }).sort((a,b) => { const o={A:0,B:1,C:2,D:3,E:4,U:5}; return (o[a.score]??99)-(o[b.score]??99)||a.name.localeCompare(b.name); });
+
+  const filteredPAs = search
+    ? placementAgents.filter(pa => {
+        const s = search.toLowerCase();
+        return pa.name.toLowerCase().includes(s) ||
+          (pa.hq||"").toLowerCase().includes(s) ||
+          (pa.contact||"").toLowerCase().includes(s) ||
+          (pa.contactEmail||"").toLowerCase().includes(s);
+      })
+    : placementAgents;
+
+  const mode = darkMode ? 'dark' : 'light';
+  const customVars = {};
+  Object.keys(SCORE_CONFIG).forEach(grade => {
+    const c = settings.scoreColors?.[grade]?.[mode];
+    if (c?.bg) customVars[`--sb-${grade}-bg`] = c.bg;
+    if (c?.color) { customVars[`--sb-${grade}-c`] = c.color; customVars[`--sb-${grade}-bd`] = c.color + '40'; }
+  });
+  const sc = settings.sectorColors?.[mode];
+  if (sc?.bg) customVars['--sector-bg'] = sc.bg;
+  if (sc?.color) customVars['--sector-c'] = sc.color;
+  if (sc?.border) customVars['--sector-bd'] = sc.border;
 
   const wrap = (children) => (
-    <div style={{ ...theme, background: "var(--bg)", minHeight: "100vh", padding: "2rem", fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", color: "var(--tx1)" }}>
-      <div style={{ maxWidth: "1400px", margin: "0 auto" }}>
+    <SettingsContext.Provider value={{ settings, mode, setSettings: (s) => setData(d => ({ ...d, settings: s })) }}>
+    <div style={{ ...theme, ...customVars, background: "var(--bg)", height: "100vh", boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column", padding: "2rem 2rem 1.25rem", fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", color: "var(--tx1)" }}>
+      <div style={{ maxWidth: "1400px", margin: "0 auto", flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
         {/* Top bar */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.75rem", flexWrap: "wrap", gap: "0.75rem" }}>
           <div onClick={goHome} style={{ display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer" }}>
@@ -296,13 +356,14 @@ export default function App() {
               ))}
             </span>
             <button onClick={() => setDarkMode(d => !d)} style={{ ...btnGhost, fontSize: "1rem", padding: "0.25rem 0.55rem" }} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}>{darkMode ? "☀" : "☾"}</button>
+            <button onClick={() => setView("settings")} style={{ ...btnGhost, fontSize: "1rem", padding: "0.25rem 0.55rem" }} title="Settings">⚙</button>
             <button onClick={() => setView("pipeline")} style={{ ...btnGhost, color: "#a78bfa", borderColor: "#7c3aed", fontSize: "0.8125rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
               Pipeline Board
               <kbd style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontFamily: "monospace", fontSize: "0.65rem", color: "var(--tx5)" }}>{SHORTCUTS.find(s=>s.view==="pipeline")?.key}</kbd>
             </button>
             <DataMenu exportData={exportData} fileInputRef={fileInputRef} importData={importData} onLoadSeed={() => setData(mkSeed())} />
             <input ref={fileInputRef} type="file" accept=".json" onChange={importData} style={{ display: "none" }} />
-            <button onClick={() => setShowAddNew(true)} style={{ background: "linear-gradient(135deg,#1d4ed8,#7c3aed)", border: "none", borderRadius: "7px", color: "#fff", padding: "0.55rem 1.1rem", fontSize: "0.875rem", fontWeight: 700, cursor: "pointer" }}>+ Add New</button>
+            <button onClick={() => { setShowAddNew(true); openModal('addNew'); }} style={{ background: "linear-gradient(135deg,#1d4ed8,#7c3aed)", border: "none", borderRadius: "7px", color: "#fff", padding: "0.55rem 1.1rem", fontSize: "0.875rem", fontWeight: 700, cursor: "pointer" }}>+ Add New</button>
           </div>
         </div>
         {isFallback && (
@@ -319,27 +380,34 @@ export default function App() {
         {children}
       </div>
     </div>
+    </SettingsContext.Provider>
   );
 
   const renderOverlays = () => (
     <>
-      {showSearch && !gpOverlay && !fundOverlay && !meetingOverlay && (
+      {showSearch && (
         <GlobalSearch
           gps={gps}
+          placementAgents={placementAgents}
           query={searchQuery}
           onQueryChange={setSearchQuery}
-          onClose={() => { setShowSearch(false); setSearchQuery(""); }}
-          onGpClick={(gp) => { setGpOverlay(gp); }}
-          onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); }}
-          onMeetingClick={(m, gp) => { setMeetingOverlay({ meeting: m, gp }); }}
+          zIndex={zOf('search')}
+          active={Object.entries(modalZs).filter(([,z]) => z > 0).sort(([,a],[,b]) => b - a)[0]?.[0] === 'search'}
+          onClose={() => { setShowSearch(false); setSearchQuery(""); closeModal('search'); }}
+          onGpClick={(gp) => { setGpOverlay(gp); openModal('gp'); }}
+          onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); }}
+          onMeetingClick={(m, gp) => { setMeetingOverlay({ meeting: m, gp }); openModal('meeting'); }}
+          onPaClick={(pa) => { setPaOverlay(pa); openModal('pa'); }}
         />
       )}
       {gpOverlay && (
-        <GPDetailOverlay gp={gpOverlay} owners={allOwners} onClose={() => { setGpOverlay(null); setFundOverlay(null); }} onUpdate={updateGP} onTagClick={handleTagClick}
-          onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); }}
-          onMeetingClick={(m, gp) => setMeetingOverlay({ meeting: m, gp })}
-          onLogMeeting={(gp, fundId) => setLogMeeting({ gp, fundId })}
-          onDeleteGP={(id) => { setGpOverlay(null); setFundOverlay(null); setGPs(g => g.filter(x => x.id !== id)); }}
+        <GPDetailOverlay gp={gpOverlay} owners={allOwners} zIndex={zOf('gp')}
+          onClose={() => { setGpOverlay(null); closeModal('gp'); setFundOverlay(null); closeModal('fund'); }}
+          onUpdate={updateGP} onTagClick={handleTagClick}
+          onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); }}
+          onMeetingClick={(m, gp) => { setMeetingOverlay({ meeting: m, gp }); openModal('meeting'); }}
+          onLogMeeting={(gp, fundId) => { setLogMeeting({ gp, fundId }); openModal('logMeeting'); }}
+          onDeleteGP={(id) => { setGpOverlay(null); closeModal('gp'); setFundOverlay(null); closeModal('fund'); setGPs(g => g.filter(x => x.id !== id)); }}
         />
       )}
       {fundOverlay && (
@@ -355,16 +423,15 @@ export default function App() {
               return [...pl, { id: uid(), fundId, gpName: fundOverlay.gp?.name || "", stage, addedAt: now() }];
             });
           }}
-          onClose={() => { setFundOverlay(null); fundInlineEditingRef.current = false; }}
-          zIndex={1100}
+          onClose={() => { setFundOverlay(null); closeModal('fund'); fundInlineEditingRef.current = false; }}
+          zIndex={zOf('fund')}
           onEditingChange={(id) => { fundInlineEditingRef.current = !!id; }}
           onGpClick={(gp) => {
             if (gpOverlay?.id === gp.id) {
-              // GP overlay already open below — just close fund to reveal it
-              setFundOverlay(null);
+              setFundOverlay(null); closeModal('fund');
             } else {
-              setGpOverlay(gp);
-              setFundOverlay(null);
+              setGpOverlay(gp); openModal('gp');
+              setFundOverlay(null); closeModal('fund');
             }
           }}
           onSaveFund={(updated) => {
@@ -373,12 +440,35 @@ export default function App() {
             updateGP(updatedGP);
             setFundOverlay({ ...fundOverlay, fund: updated, gp: updatedGP });
           }}
-          onAddMeeting={(fid) => {
-            // Use app-level meeting logger so it works from anywhere
-            setLogMeeting({ gp: fundOverlay.gp, fundId: fid });
-          }}
+          onAddMeeting={(fid) => { setLogMeeting({ gp: fundOverlay.gp, fundId: fid }); openModal('logMeeting'); }}
           onTagClick={handleTagClick}
-          onMeetingClick={(m) => setMeetingOverlay({ meeting: m, gp: fundOverlay.gp })}
+          onMeetingClick={(m) => { setMeetingOverlay({ meeting: m, gp: fundOverlay.gp }); openModal('meeting'); }}
+          placementAgents={placementAgents}
+          onPlacementAgentClick={(pa) => { setPaOverlay(pa); openModal('pa'); }}
+        />
+      )}
+      {paOverlay && (
+        <PlacementAgentDetailOverlay
+          pa={paOverlay}
+          allGps={gps}
+          zIndex={zOf('pa')}
+          onClose={() => { setPaOverlay(null); closeModal('pa'); }}
+          onUpdate={(updated) => {
+            if (updated.__addFund) {
+              const fid = updated.__addFund;
+              setGPs(gs => gs.map(g => ({ ...g, funds: (g.funds||[]).map(f => f.id === fid ? { ...f, placementAgentId: paOverlay.id } : f) })));
+              return;
+            }
+            if (updated.__removeFund) {
+              const fid = updated.__removeFund;
+              setGPs(gs => gs.map(g => ({ ...g, funds: (g.funds||[]).map(f => f.id === fid ? { ...f, placementAgentId: null } : f) })));
+              return;
+            }
+            setPAs(pas => pas.map(p => p.id === updated.id ? updated : p));
+            setPaOverlay(updated);
+          }}
+          onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); }}
+          onDeletePA={(id) => { setPaOverlay(null); closeModal('pa'); setPAs(pas => pas.filter(p => p.id !== id)); }}
         />
       )}
       {meetingOverlay && (
@@ -386,9 +476,9 @@ export default function App() {
           meeting={meetingOverlay.meeting}
           gpName={meetingOverlay.gp?.name}
           fundName={(meetingOverlay.gp?.funds||[]).find(f=>f.id===meetingOverlay.meeting.fundId)?.name}
-          onClose={() => setMeetingOverlay(null)}
-          zIndex={1200}
-          onEdit={(m) => { setMeetingOverlay(null); setEditMeeting({ gp: meetingOverlay.gp, meeting: m }); }}
+          onClose={() => { setMeetingOverlay(null); closeModal('meeting'); }}
+          zIndex={zOf('meeting')}
+          onEdit={(m) => { setMeetingOverlay(null); closeModal('meeting'); setEditMeeting({ gp: meetingOverlay.gp, meeting: m }); openModal('editMeeting'); }}
           onDelete={(id) => {
             const gp = meetingOverlay.gp;
             updateGP({ ...gp, meetings: (gp.meetings||[]).filter(m => m.id !== id) });
@@ -397,8 +487,8 @@ export default function App() {
         />
       )}
       {logMeeting && (
-        <Overlay onClose={() => setLogMeeting(null)} width="580px" zIndex={1400}>
-          <OverlayHeader title="Log Meeting" subtitle={logMeeting.gp?.name} onClose={() => setLogMeeting(null)} />
+        <Overlay onClose={() => { setLogMeeting(null); closeModal('logMeeting'); }} width="580px" zIndex={zOf('logMeeting')}>
+          <OverlayHeader title="Log Meeting" subtitle={logMeeting.gp?.name} onClose={() => { setLogMeeting(null); closeModal('logMeeting'); }} />
           <div style={{ padding: "1.5rem" }}>
             <MeetingForm
               initial={{ date: "", type: "Virtual", location: "", topic: "", notes: "", fundId: logMeeting.fundId || null, loggedBy: "Me", loggedAt: now() }}
@@ -406,21 +496,21 @@ export default function App() {
               showFundPicker={!logMeeting.fundId}
               unitMembers={allOwners}
               onSave={saveLoggedMeeting}
-              onClose={() => setLogMeeting(null)}
+              onClose={() => { setLogMeeting(null); closeModal('logMeeting'); }}
             />
           </div>
         </Overlay>
       )}
       {editMeeting && (
-        <Overlay onClose={() => setEditMeeting(null)} width="580px" zIndex={1400}>
-          <OverlayHeader title="Edit Meeting" subtitle={editMeeting.gp?.name} onClose={() => setEditMeeting(null)} />
+        <Overlay onClose={() => { setEditMeeting(null); closeModal('editMeeting'); }} width="580px" zIndex={zOf('editMeeting')}>
+          <OverlayHeader title="Edit Meeting" subtitle={editMeeting.gp?.name} onClose={() => { setEditMeeting(null); closeModal('editMeeting'); }} />
           <div style={{ padding: "1.5rem" }}>
             <MeetingForm
               initial={editMeeting.meeting}
               funds={editMeeting.gp?.funds || []}
               unitMembers={allOwners}
               onSave={saveEditedMeeting}
-              onClose={() => setEditMeeting(null)}
+              onClose={() => { setEditMeeting(null); closeModal('editMeeting'); }}
             />
           </div>
         </Overlay>
@@ -428,7 +518,7 @@ export default function App() {
       {showAddNew && (
         <SmartAddModal
           gps={gps}
-          onClose={() => setShowAddNew(false)}
+          onClose={() => { setShowAddNew(false); closeModal('addNew'); }}
           onAddGP={(d) => { setGPs(gs => [{ ...d, id: uid(), funds: [], meetings: [] }, ...gs]); }}
           onAddFund={(gpId, d) => {
             const gp = gps.find(g => g.id === gpId);
@@ -440,16 +530,17 @@ export default function App() {
               const freshGP = gps.find(g => g.id === gp.id) || gp;
               updateGP({ ...freshGP, meetings: [{ ...m, id: uid() }, ...(freshGP.meetings||[])] });
             } else {
-              setLogMeeting({ gp, fundId });
+              setLogMeeting({ gp, fundId }); openModal('logMeeting');
             }
           }}
+          onAddPA={(d) => { setPAs(pas => [{ ...d, id: uid() }, ...(pas || [])]);  }}
         />
       )}
       {showAddGP && (
-        <Overlay onClose={() => setShowAddGP(false)} width="580px" zIndex={1300}>
-          <OverlayHeader title="Add New GP" onClose={() => setShowAddGP(false)} />
+        <Overlay onClose={() => { setShowAddGP(false); closeModal('addGP'); }} width="580px" zIndex={zOf('addGP')}>
+          <OverlayHeader title="Add New GP" onClose={() => { setShowAddGP(false); closeModal('addGP'); }} />
           <div style={{ padding: "1.5rem" }}>
-            <GPForm onSave={(d) => { setGPs(gps => [{ ...d, id: uid(), funds: [], meetings: [] }, ...gps]); setShowAddGP(false); }} onClose={() => setShowAddGP(false)} />
+            <GPForm onSave={(d) => { setGPs(gps => [{ ...d, id: uid(), funds: [], meetings: [] }, ...gps]); setShowAddGP(false); closeModal('addGP'); }} onClose={() => { setShowAddGP(false); closeModal('addGP'); }} />
           </div>
         </Overlay>
       )}
@@ -457,17 +548,18 @@ export default function App() {
   );
 
   // Sub-views
-  if (view === "dashboard") return wrap(<><DashboardView gps={gps} pipeline={pipeline} todos={todos} owners={allOwners} onBack={goHome} onAddTodo={handleAddTodo} onToggleTodo={handleToggleTodo} onDeleteTodo={handleDeleteTodo} onMeetingClick={(m, gp) => setMeetingOverlay({ meeting: m, gp })} onFundClick={handleFundClick} />{renderOverlays()}</>);
-  if (view === "pipeline") return wrap(<><PipelineBoard pipeline={pipeline} gps={gps} onUpdate={setPipeline} onFundClick={(f, gp) => setFundOverlay({ fund: f, gp })} onBack={goHome} />{renderOverlays()}</>);
-  if (view === "allMeetings") return wrap(<><AllMeetingsView gps={gps} onBack={goHome} onMeetingClick={(m, gp) => setMeetingOverlay({ meeting: m, gp })} />{renderOverlays()}</>);
+  if (view === "settings") return wrap(<><SettingsView onBack={goHome} />{renderOverlays()}</>);
+  if (view === "dashboard") return wrap(<><DashboardView gps={gps} pipeline={pipeline} todos={todos} owners={allOwners} onBack={goHome} onAddTodo={handleAddTodo} onToggleTodo={handleToggleTodo} onDeleteTodo={handleDeleteTodo} onMeetingClick={handleMeetingClick} onFundClick={handleFundClick} />{renderOverlays()}</>);
+  if (view === "pipeline") return wrap(<><PipelineBoard pipeline={pipeline} gps={gps} onUpdate={setPipeline} onFundClick={handleFundClick} onBack={goHome} />{renderOverlays()}</>);
+  if (view === "allMeetings") return wrap(<><AllMeetingsView gps={gps} onBack={goHome} onMeetingClick={handleMeetingClick} />{renderOverlays()}</>);
   if (view === "allFunds") return wrap(<><AllFundsView gps={gps} onBack={goHome} onFundClick={handleFundClick} onTagClick={handleTagClick} />{renderOverlays()}</>);
   if (view === "tagFilter") return wrap(<><TagFilterView type={tagFilter?.type} value={tagFilter?.value} gps={gps} onBack={() => setView(prevView || "home")} onFundClick={handleFundClick} />{renderOverlays()}</>);
-  if (view === "gradeA") return wrap(<><GradeAView gps={gps} onBack={goHome} onGpClick={setGpOverlay} />{renderOverlays()}</>);
-  if (view === "fundraising") return wrap(<><FundraisingView gps={gps} onBack={goHome} onFundClick={(f, gp) => setFundOverlay({ fund: f, gp })} />{renderOverlays()}</>);
+  if (view === "gradeA") return wrap(<><GradeAView gps={gps} onBack={goHome} onGpClick={handleGpClick} />{renderOverlays()}</>);
+  if (view === "fundraising") return wrap(<><FundraisingView gps={gps} onBack={goHome} onFundClick={handleFundClick} />{renderOverlays()}</>);
 
   // HOME
   return wrap(
-    <div>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "0.75rem", marginBottom: "1rem" }}>
         <StatCard label="Total GPs" value={gps.length} onClick={goHome} sub="All GPs" shortcut={SHORTCUTS.find(s=>s.view==="home")?.key} />
         <StatCard label="Grade A GPs" value={aGPsCount} accent="#22c55e" sub="Likely to invest" onClick={() => setView("gradeA")} shortcut={SHORTCUTS.find(s=>s.view==="gradeA")?.key} />
@@ -551,6 +643,7 @@ export default function App() {
       </div>
 
       {/* ── Dense Table ───────────────────────────────── */}
+      <div style={{ flex: 1, minHeight: 0 }}>
       <DenseTable
         filtered={filtered}
         allGps={gps}
@@ -559,7 +652,20 @@ export default function App() {
         onFundClick={(fund, gp) => handleFundClick(fund, gp)}
         onMeetingClick={handleMeetingClick}
         autoExpand={!!(search || scoreF.length || stratF.length || statusF.length)}
+        owners={allOwners}
+        onUpdateGP={updateGP}
+        onUpdatePipeline={(fundId, stage, gp) => {
+          setPipeline(pl => {
+            const existing = pl.find(p => p.fundId === fundId);
+            if (!stage) return pl.filter(p => p.fundId !== fundId);
+            if (existing) return pl.map(p => p.fundId === fundId ? { ...p, stage } : p);
+            return [...pl, { id: uid(), fundId, gpName: gp?.name || "", stage, addedAt: now() }];
+          });
+        }}
+        placementAgents={filteredPAs}
+        onPaClick={(pa) => setPaOverlay(pa)}
       />
+      </div>
       {renderOverlays()}
     </div>
   );

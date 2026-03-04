@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import { SCORE_CONFIG, STATUS_PILL_KEY, STATUS_OPTIONS, PIPELINE_STAGES, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS } from '../constants.js';
+import { SCORE_CONFIG, STATUS_OPTIONS, PIPELINE_STAGES, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS } from '../constants.js';
 import { IS } from '../theme.js';
-import { Chip } from './Badges.jsx';
+import { Chip, getStatusStyle } from './Badges.jsx';
+import { useSettings } from '../settingsContext.js';
 
 // Shared hook: close popover when clicking outside
 function useOutsideClick(ref, onClose) {
@@ -57,26 +58,28 @@ export function ScorePicker({ score, onChange, size = "sm" }) {
 export function StatusPicker({ status, onChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
+  const { settings, mode } = useSettings();
+  const effectiveStatuses = settings.statusOptions ?? STATUS_OPTIONS;
   useOutsideClick(ref, () => setOpen(false));
-  const k = STATUS_PILL_KEY[status] || 3;
+  const { bg, color } = getStatusStyle(status, settings, mode);
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ background: `var(--pill-bg-${k})`, color: `var(--pill-c-${k})`, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
+        style={{ background: bg, color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
         {status}
       </span>
       {open && (
         <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "160px" })}>
           <div style={popoverLabel}>Status</div>
-          {STATUS_OPTIONS.map(s => {
-            const sk = STATUS_PILL_KEY[s] || 3;
+          {effectiveStatuses.map(s => {
+            const ss = getStatusStyle(s, settings, mode);
             return (
               <div key={s} onClick={() => { onChange(s); setOpen(false); }}
-                style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: s === status ? `var(--pill-bg-${sk})` : "none" }}
+                style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: s === status ? ss.bg : "none" }}
                 onMouseEnter={e => { if (s !== status) e.currentTarget.style.background = "var(--hover)"; }}
                 onMouseLeave={e => { if (s !== status) e.currentTarget.style.background = "none"; }}>
-                <span style={{ background: `var(--pill-bg-${sk})`, color: `var(--pill-c-${sk})`, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.72rem", minWidth: "90px" }}>{s}</span>
-                {s === status && <span style={{ color: `var(--pill-c-${sk})`, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
+                <span style={{ background: ss.bg, color: ss.color, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.72rem", minWidth: "90px" }}>{s}</span>
+                {s === status && <span style={{ color: ss.color, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
               </div>
             );
           })}
@@ -158,8 +161,10 @@ export function OwnerPicker({ owner, owners = [], onChange, placeholder }) {
 export function StagePicker({ stage, onChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
+  const { settings } = useSettings();
+  const effectiveStages = settings.pipelineStages ?? PIPELINE_STAGES;
   useOutsideClick(ref, () => setOpen(false));
-  const current = PIPELINE_STAGES.find(s => s.id === stage);
+  const current = effectiveStages.find(s => s.id === stage);
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
@@ -176,7 +181,7 @@ export function StagePicker({ stage, onChange }) {
             <span style={{ color: "var(--tx5)", fontSize: "0.8rem", fontStyle: "italic" }}>None</span>
             {!stage && <span style={{ marginLeft: "auto", color: "var(--tx4)", fontSize: "0.7rem" }}>✓</span>}
           </div>
-          {PIPELINE_STAGES.map(s => (
+          {effectiveStages.map(s => (
             <div key={s.id} onClick={() => { onChange(s.id); setOpen(false); }}
               style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: s.id === stage ? s.bg : "none" }}
               onMouseEnter={e => { if (s.id !== stage) e.currentTarget.style.background = "var(--hover)"; }}
@@ -195,6 +200,8 @@ export function StagePicker({ stage, onChange }) {
 export function StrategyPicker({ strategy, onChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
+  const { settings } = useSettings();
+  const effectiveStrategies = settings.strategies ?? STRATEGY_OPTIONS;
   useOutsideClick(ref, () => setOpen(false));
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -211,7 +218,7 @@ export function StrategyPicker({ strategy, onChange }) {
             onMouseLeave={e => e.currentTarget.style.background = "none"}>
             <span style={{ color: "var(--tx5)", fontSize: "0.8rem", fontStyle: "italic" }}>None</span>
           </div>
-          {STRATEGY_OPTIONS.map(s => (
+          {effectiveStrategies.map(s => (
             <div key={s} onClick={() => { onChange(s); setOpen(false); }}
               style={{ padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: s === strategy ? "var(--subtle)" : "none", display: "flex", alignItems: "center", justifyContent: "space-between" }}
               onMouseEnter={e => { if (s !== strategy) e.currentTarget.style.background = "var(--hover)"; }}
@@ -232,9 +239,11 @@ export function SubStrategyPicker({ strategy, subStrategy, onChange }) {
   const [text, setText] = useState(subStrategy || "");
   const ref = useRef();
   const inputRef = useRef();
+  const { settings } = useSettings();
+  const effectivePresets = settings.subStrategyPresets ?? SUB_STRATEGY_PRESETS;
   useOutsideClick(ref, () => setOpen(false));
   useEffect(() => { if (open) { setText(subStrategy || ""); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
-  const options = strategy ? (SUB_STRATEGY_PRESETS[strategy] || []) : [];
+  const options = strategy ? (effectivePresets[strategy] || []) : [];
   const save = (val) => { onChange(val || null); setOpen(false); };
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -272,15 +281,28 @@ export function SubStrategyPicker({ strategy, subStrategy, onChange }) {
   );
 }
 
-// Shared context so only one InlineMetric can be open at a time
-export const EditingContext = React.createContext({ editingId: null, setEditingId: () => {} });
+// Shared context so only one InlineMetric can be open at a time.
+// registerMetric / unregisterMetric / nextMetricId enable Tab-to-next navigation.
+export const EditingContext = React.createContext({
+  editingId: null,
+  setEditingId: () => {},
+  registerMetric: () => {},
+  unregisterMetric: () => {},
+  nextMetricId: () => null,
+});
 
-// Inline-editable metric card — Enter to save, Esc/blur to cancel, only one open at a time
+// Inline-editable metric card — Enter/Tab to save, Esc/blur to cancel, only one open at a time
 export function InlineMetric({ id, label, value, displayValue, onSave, placeholder = "", type = "text" }) {
-  const { editingId, setEditingId } = React.useContext(EditingContext);
+  const { editingId, setEditingId, registerMetric, unregisterMetric, nextMetricId } = React.useContext(EditingContext);
   const editing = editingId === id;
   const [draft, setDraft] = useState(value || "");
   const inputRef = useRef();
+
+  // Register this metric in the ordered registry for Tab navigation
+  useEffect(() => {
+    registerMetric(id);
+    return () => unregisterMetric(id);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (editing) {
@@ -313,7 +335,8 @@ export function InlineMetric({ id, label, value, displayValue, onSave, placehold
             if (e.key === "Escape") { e.stopPropagation(); cancel(); }
             if (e.key === "Tab") {
               e.preventDefault();
-              if (draft.trim() !== (value || "")) commit(); else cancel();
+              onSave(draft.trim());
+              setEditingId(nextMetricId(id));
             }
           }}
           onBlur={() => {

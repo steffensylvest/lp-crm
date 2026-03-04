@@ -4,6 +4,7 @@ export const SCORE_CONFIG = {
   C: { color: "#fb923c", bg: "#3d1608", desc: "Watching closely" },
   D: { color: "#f97316", bg: "#431407", desc: "Low priority" },
   E: { color: "#ef4444", bg: "#450a0a", desc: "Pass" },
+  U: { color: "#94a3b8", bg: "#1e293b", desc: "Unrated" },
 };
 export const STRATEGY_OPTIONS = ["Buyout","Growth Equity","Venture Capital","Private Credit","Real Assets","Infrastructure","Real Estate","Fund of Funds","Secondary","Other"];
 export const SUB_STRATEGY_PRESETS = {

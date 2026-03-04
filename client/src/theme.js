@@ -4,19 +4,26 @@ export const DARK = {
   '--border': '#243347', '--border-hi': '#384f68',
   '--tx1': '#f1f5f9', '--tx2': '#a8bbc8', '--tx3': '#7e99ac',
   '--tx4': '#627d92', '--tx5': '#475569',
-  // Score badges  A=green · B=cyan · C=amber · D=orange · E=red
+  // Score badges  A=green · B=cyan · C=amber · D=orange · E=red · U=grey
   '--sb-A-bg': '#052e16', '--sb-A-c': '#4ade80', '--sb-A-bd': '#4ade8040',
   '--sb-B-bg': '#083344', '--sb-B-c': '#22d3ee', '--sb-B-bd': '#22d3ee40',
   '--sb-C-bg': '#2d2000', '--sb-C-c': '#fbbf24', '--sb-C-bd': '#fbbf2440',
   '--sb-D-bg': '#3d1608', '--sb-D-c': '#fb923c', '--sb-D-bd': '#fb923c40',
   '--sb-E-bg': '#450a0a', '--sb-E-c': '#f87171', '--sb-E-bd': '#f8717140',
-  // Status pills
-  '--pill-bg-1': '#1e3a5f', '--pill-c-1': '#60a5fa',   // Fundraising
-  '--pill-bg-2': '#1c2a40', '--pill-c-2': '#93c5fd',   // Pre-Marketing
-  '--pill-bg-3': '#1e293b', '--pill-c-3': '#94a3b8',   // Closed
-  '--pill-bg-4': '#14532d', '--pill-c-4': '#4ade80',   // Deployed
-  '--pill-bg-5': '#1e293b', '--pill-c-5': '#64748b',   // Monitoring
-  '--pill-bg-6': '#451a03', '--pill-c-6': '#fbbf24',   // Exiting
+  '--sb-U-bg': '#1e293b', '--sb-U-c': '#94a3b8', '--sb-U-bd': '#94a3b840',
+  // Status pills (slots 1-6 default · 7-12 for custom statuses)
+  '--pill-bg-1':  '#1e3a5f', '--pill-c-1':  '#60a5fa',   // Fundraising
+  '--pill-bg-2':  '#1c2a40', '--pill-c-2':  '#93c5fd',   // Pre-Marketing
+  '--pill-bg-3':  '#1e293b', '--pill-c-3':  '#94a3b8',   // Closed
+  '--pill-bg-4':  '#14532d', '--pill-c-4':  '#4ade80',   // Deployed
+  '--pill-bg-5':  '#1e293b', '--pill-c-5':  '#64748b',   // Monitoring
+  '--pill-bg-6':  '#451a03', '--pill-c-6':  '#fbbf24',   // Exiting
+  '--pill-bg-7':  '#1c2a1c', '--pill-c-7':  '#86efac',
+  '--pill-bg-8':  '#2d1f00', '--pill-c-8':  '#fcd34d',
+  '--pill-bg-9':  '#1c1c2d', '--pill-c-9':  '#c4b5fd',
+  '--pill-bg-10': '#2d0f0f', '--pill-c-10': '#fca5a5',
+  '--pill-bg-11': '#0f2d2d', '--pill-c-11': '#67e8f9',
+  '--pill-bg-12': '#1a1a1a', '--pill-c-12': '#a8bbc8',
   // Chips
   '--chip-bg': '#1e293b', '--chip-c': '#94a3b8',
   '--sector-bg': '#0c1829', '--sector-c': '#93b4cc', '--sector-bd': '#1a3550',
@@ -35,19 +42,26 @@ export const LIGHT = {
   '--border': '#d1dae6', '--border-hi': '#94a3b8',
   '--tx1': '#0f172a', '--tx2': '#334155', '--tx3': '#475569',
   '--tx4': '#64748b', '--tx5': '#94a3b8',
-  // Score badges  A=green · B=cyan · C=amber · D=orange · E=red
+  // Score badges  A=green · B=cyan · C=amber · D=orange · E=red · U=grey
   '--sb-A-bg': '#dcfce7', '--sb-A-c': '#166534', '--sb-A-bd': '#16653440',
   '--sb-B-bg': '#cffafe', '--sb-B-c': '#0e7490', '--sb-B-bd': '#0e749040',
   '--sb-C-bg': '#fef9c3', '--sb-C-c': '#92400e', '--sb-C-bd': '#92400e40',
   '--sb-D-bg': '#ffedd5', '--sb-D-c': '#c2410c', '--sb-D-bd': '#c2410c40',
   '--sb-E-bg': '#fef2f2', '--sb-E-c': '#dc2626', '--sb-E-bd': '#dc262640',
-  // Status pills
-  '--pill-bg-1': '#dbeafe', '--pill-c-1': '#1d4ed8',   // Fundraising
-  '--pill-bg-2': '#eff6ff', '--pill-c-2': '#2563eb',   // Pre-Marketing
-  '--pill-bg-3': '#f1f5f9', '--pill-c-3': '#64748b',   // Closed
-  '--pill-bg-4': '#dcfce7', '--pill-c-4': '#166534',   // Deployed
-  '--pill-bg-5': '#f8fafc', '--pill-c-5': '#64748b',   // Monitoring
-  '--pill-bg-6': '#fef9c3', '--pill-c-6': '#92400e',   // Exiting
+  '--sb-U-bg': '#f1f5f9', '--sb-U-c': '#64748b', '--sb-U-bd': '#64748b40',
+  // Status pills (slots 1-6 default · 7-12 for custom statuses)
+  '--pill-bg-1':  '#dbeafe', '--pill-c-1':  '#1d4ed8',   // Fundraising
+  '--pill-bg-2':  '#eff6ff', '--pill-c-2':  '#2563eb',   // Pre-Marketing
+  '--pill-bg-3':  '#f1f5f9', '--pill-c-3':  '#64748b',   // Closed
+  '--pill-bg-4':  '#dcfce7', '--pill-c-4':  '#166534',   // Deployed
+  '--pill-bg-5':  '#f8fafc', '--pill-c-5':  '#64748b',   // Monitoring
+  '--pill-bg-6':  '#fef9c3', '--pill-c-6':  '#92400e',   // Exiting
+  '--pill-bg-7':  '#f0fdf4', '--pill-c-7':  '#166534',
+  '--pill-bg-8':  '#fffbeb', '--pill-c-8':  '#92400e',
+  '--pill-bg-9':  '#f5f3ff', '--pill-c-9':  '#6d28d9',
+  '--pill-bg-10': '#fef2f2', '--pill-c-10': '#b91c1c',
+  '--pill-bg-11': '#ecfeff', '--pill-c-11': '#0e7490',
+  '--pill-bg-12': '#f8fafc', '--pill-c-12': '#475569',
   // Chips
   '--chip-bg': '#e2e8f0', '--chip-c': '#64748b',
   '--sector-bg': '#e0f2fe', '--sector-c': '#0369a1', '--sector-bd': '#7dd3fc',

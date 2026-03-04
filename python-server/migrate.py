@@ -3,8 +3,7 @@
 migrate.py — One-time migration from data.json → SQL database
 
 Usage (from the python-server/ directory):
-    python migrate.py                        # uses ../server/data.json by default
-    python migrate.py /path/to/data.json     # explicit path
+    python migrate.py /path/to/data.json
 
 The script is idempotent: it clears all tables before reinserting, so it is
 safe to run multiple times (e.g. if you want to re-seed from a fresh JSON dump).
@@ -56,6 +55,7 @@ def migrate(json_path: Union[str, Path]) -> None:
 
 
 if __name__ == "__main__":
-    default_path = Path(__file__).parent.parent / "server" / "data.json"
-    path_arg = sys.argv[1] if len(sys.argv) > 1 else str(default_path)
-    migrate(path_arg)
+    if len(sys.argv) < 2:
+        print("Usage: python migrate.py /path/to/data.json")
+        sys.exit(1)
+    migrate(sys.argv[1])

@@ -47,8 +47,6 @@ npm run setup:python
 
 # Seed the database from the bundled fixture data
 cp python-server/lp_crm_seed.db python-server/lp_crm.db
-# — or migrate from a data.json export —
-# npm run migrate
 ```
 
 ### Run in development
@@ -106,10 +104,6 @@ lp-crm/
 │   ├── .env.example         DATABASE_URL template
 │   └── lp_crm_seed.db       Seed database with dummy data (safe to commit)
 │
-├── server/                  Legacy Node.js server (kept for reference)
-│   ├── index.js
-│   └── data.json            Source file for migrate.py
-│
 └── docs/
     ├── ARCHITECTURE.md      Full file map, API endpoints, component props
     ├── DATA-MODEL.md        TypeScript shapes + full SQL DDL + schema gaps
@@ -143,7 +137,7 @@ SQLite by default. The schema is created automatically on startup via `Base.meta
    ```
    DATABASE_URL=snowflake://USER:PASS@ACCOUNT/DB/SCHEMA?warehouse=WH&role=ROLE
    ```
-3. Restart — SQLAlchemy handles the dialect. Run `npm run migrate` to seed from `server/data.json`.
+3. Restart — SQLAlchemy handles the dialect. Run `python python-server/migrate.py /path/to/data.json` to seed.
 
 ---
 

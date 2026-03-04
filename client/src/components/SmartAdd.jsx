@@ -3,13 +3,13 @@ import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, C
 import { IS, ISFilled, btnBase, btnPrimary, btnGhost } from '../theme.js';
 import { uid, now } from '../utils.js';
 import { Chip } from './Badges.jsx';
-import { GPForm, FundForm, MeetingForm } from './Forms.jsx';
+import { GPForm, FundForm, MeetingForm, PAForm } from './Forms.jsx';
 import { Overlay, OverlayHeader } from './Overlay.jsx';
 
 // ─── Smart Add Modal (AI-powered intent detection) ───────────────────────────
-export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting }) {
+export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting, onAddPA }) {
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState(null); // null | "gp" | "fund" | "meeting"
+  const [mode, setMode] = useState(null); // null | "gp" | "fund" | "meeting" | "pa"
   const [detecting, setDetecting] = useState(false);
   const [selectedGPId, setSelectedGPId] = useState(gps.length === 1 ? gps[0].id : "");
   const inputRef = useRef();
@@ -53,8 +53,8 @@ export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting }
                 {detecting ? "…" : "↵ Detect"}
               </button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.65rem" }}>
-              {[["gp","🏦","GP / Manager","New fund manager"],["fund","📊","Fund","New fund vehicle"],["meeting","📅","Meeting","Log an interaction"]].map(([key,icon,label,sub]) => (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.65rem" }}>
+              {[["gp","🏦","GP / Manager","New fund manager"],["fund","📊","Fund","New fund vehicle"],["meeting","📅","Meeting","Log an interaction"],["pa","🤝","Placement Agent","New placement agent"]].map(([key,icon,label,sub]) => (
                 <button key={key} onClick={() => setMode(key)}
                   style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "12px", padding: "1.25rem 0.75rem", cursor: "pointer", textAlign: "center", transition: "border-color 0.15s, background 0.15s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--border-hi)"; e.currentTarget.style.background = "var(--hover)"; }}
@@ -69,8 +69,8 @@ export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting }
         ) : (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1.25rem", padding: "0.6rem 0.75rem", background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px" }}>
-              <span style={{ fontSize: "1rem" }}>{mode === "gp" ? "🏦" : mode === "fund" ? "📊" : "📅"}</span>
-              <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.875rem" }}>{mode === "gp" ? "Add GP / Manager" : mode === "fund" ? "Add Fund" : "Log Meeting"}</span>
+              <span style={{ fontSize: "1rem" }}>{mode === "gp" ? "🏦" : mode === "fund" ? "📊" : mode === "pa" ? "🤝" : "📅"}</span>
+              <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.875rem" }}>{mode === "gp" ? "Add GP / Manager" : mode === "fund" ? "Add Fund" : mode === "pa" ? "Add Placement Agent" : "Log Meeting"}</span>
               <button onClick={() => setMode(null)} style={{ ...btnGhost, marginLeft: "auto", fontSize: "0.72rem" }}>← back</button>
             </div>
 
@@ -117,6 +117,10 @@ export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting }
                   <div style={{ color: "var(--tx4)", textAlign: "center", padding: "2rem", fontSize: "0.875rem" }}>Select a GP above to continue</div>
                 )}
               </div>
+            )}
+
+            {mode === "pa" && (
+              <PAForm onSave={(d) => { onAddPA && onAddPA(d); onClose(); }} onClose={onClose} />
             )}
           </>
         )}

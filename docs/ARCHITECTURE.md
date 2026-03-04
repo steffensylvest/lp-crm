@@ -5,7 +5,7 @@
 ```bash
 # First-time setup (once)
 npm run setup:python      # installs Python deps in python-server/
-npm run migrate           # imports server/data.json → SQLite DB
+cp python-server/lp_crm_seed.db python-server/lp_crm.db   # seed the database
 
 # Daily dev
 npm run dev               # starts Python server (3001) + Vite client (5173)
@@ -44,7 +44,8 @@ npm run dev:server:node
 | `database.py` | SQLAlchemy engine setup, reads `DATABASE_URL` from `.env` |
 | `models.py` | ORM table definitions (GP, Fund, FundSector, Meeting, PipelineItem, Todo + 3 history tables) |
 | `crud.py` | `get_all_data()`, `upsert_all_data()` (with change detection), history query functions |
-| `migrate.py` | One-time import: `server/data.json` → SQLite. Idempotent — safe to re-run |
+| `migrate.py` | One-time import: `data.json` → SQLite. Usage: `python migrate.py /path/to/data.json`. Idempotent — safe to re-run |
+| `lp_crm_seed.db` | Pre-seeded SQLite database for first-time setup — copy to `lp_crm.db` |
 | `requirements.txt` | FastAPI, uvicorn, SQLAlchemy, python-dotenv (Snowflake pkgs commented) |
 | `.env` | `DATABASE_URL=sqlite:///./lp_crm.db` (not committed) |
 | `.env.example` | Template with SQLite + Snowflake connection string examples |
@@ -55,19 +56,12 @@ npm run dev:server:node
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Liveness check |
-| GET | `/api/data` | Full CRM dataset (same JSON shape as old data.json) |
+| GET | `/api/data` | Full CRM dataset |
 | PUT | `/api/data` | Replace entire dataset — called by 800 ms auto-save |
 | GET | `/api/history/fund/{id}/performance` | Performance snapshots, newest first |
 | GET | `/api/history/fund/{id}/raised` | Raised-size snapshots, newest first |
 | GET | `/api/history/fund/{id}/changes` | Change log for fund (score, status, pipeline stage) |
 | GET | `/api/history/gp/{id}/changes` | Change log for GP (score, owner/responsible) |
-
-### Legacy server (`server/`) — kept for reference only
-
-| File | Contents |
-|------|----------|
-| `server/index.js` | Old Express app — GET/PUT `/api/data` only, no history |
-| `server/data.json` | Source of truth for `npm run migrate` — do not delete |
 
 ### Client — root (`client/src/`)
 
@@ -164,4 +158,4 @@ npm run dev:server:node
    DATABASE_URL=snowflake://USER:PASS@ACCOUNT/DB/SCHEMA?warehouse=WH&role=ROLE
    ```
 3. Restart the server — SQLAlchemy handles the dialect automatically.
-4. Run `npm run migrate` once to seed Snowflake from `server/data.json`.
+4. Run `python migrate.py /path/to/data.json` once to seed Snowflake.

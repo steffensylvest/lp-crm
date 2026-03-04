@@ -5,13 +5,15 @@ const TYPE_STYLES = {
   gp:      { label: "GP",      color: "#60a5fa", bg: "#1e3a5f" },
   fund:    { label: "Fund",    color: "#a78bfa", bg: "#2e1a5f" },
   meeting: { label: "Meeting", color: "#fbbf24", bg: "#3d2f00" },
+  pa:      { label: "Agent",   color: "#34d399", bg: "#064e3b" },
 };
 
-export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingClick, query, onQueryChange }) {
+export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, onFundClick, onMeetingClick, onPaClick, query, onQueryChange, zIndex = 3000, active = true }) {
   const [focusIdx, setFocusIdx] = useState(0);
   const inputRef = useRef();
 
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 0); }, []);
+  useEffect(() => { if (active) setTimeout(() => inputRef.current?.focus(), 0); }, [active]);
 
   // Build results — GPs first, then funds, then meetings, cap at 10 total
   const results = [];
@@ -24,7 +26,7 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
           type: "gp", id: `gp-${gp.id}`,
           label: gp.name,
           sub: [gp.hq, gp.score ? `Score ${gp.score}` : null].filter(Boolean).join(" · "),
-          action: () => { onGpClick(gp); },
+          action: () => { inputRef.current?.blur(); onGpClick(gp); },
         });
       }
       for (const f of gp.funds || []) {
@@ -34,7 +36,7 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
             type: "fund", id: `fund-${f.id}`,
             label: f.name,
             sub: [gp.name, f.strategy, f.status].filter(Boolean).join(" · "),
-            action: () => { onFundClick(f, gp); },
+            action: () => { inputRef.current?.blur(); onFundClick(f, gp); },
           });
         }
       }
@@ -46,9 +48,20 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
             type: "meeting", id: `mtg-${m.id}`,
             label: m.topic || "(no topic)",
             sub: [gp.name, fundName, fmt(m.date)].filter(Boolean).join(" · "),
-            action: () => { onMeetingClick(m, gp); },
+            action: () => { inputRef.current?.blur(); onMeetingClick(m, gp); },
           });
         }
+      }
+    }
+    for (const pa of placementAgents) {
+      if (results.length >= 10) break;
+      if ([pa.name, pa.hq, pa.contact, pa.contactEmail].some(v => v?.toLowerCase().includes(q))) {
+        results.push({
+          type: "pa", id: `pa-${pa.id}`,
+          label: pa.name,
+          sub: [pa.hq, pa.contact, pa.contactEmail].filter(Boolean).join(" · "),
+          action: () => { inputRef.current?.blur(); onPaClick?.(pa); },
+        });
       }
     }
   }
@@ -66,10 +79,10 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
     <>
       {/* Backdrop */}
       <div onClick={onClose}
-        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 2999, backdropFilter: "blur(3px)" }} />
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: zIndex - 1, backdropFilter: "blur(3px)" }} />
 
       {/* Search panel */}
-      <div style={{ position: "fixed", top: "14vh", left: "50%", transform: "translateX(-50%)", width: "min(640px, 92vw)", background: "var(--surface)", border: "1px solid var(--border-hi)", borderRadius: "16px", zIndex: 3000, boxShadow: "0 32px 100px rgba(0,0,0,0.95)", overflow: "hidden" }}>
+      <div style={{ position: "fixed", top: "14vh", left: "50%", transform: "translateX(-50%)", width: "min(640px, 92vw)", background: "var(--surface)", border: "1px solid var(--border-hi)", borderRadius: "16px", zIndex, boxShadow: "0 32px 100px rgba(0,0,0,0.95)", overflow: "hidden" }}>
 
         {/* Input row */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "1rem 1.25rem", borderBottom: "1px solid var(--border)" }}>
@@ -79,7 +92,7 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
             value={query}
             onChange={e => onQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search GPs, funds, meetings…"
+            placeholder="Search GPs, funds, meetings, agents…"
             style={{ flex: 1, fontSize: "1rem", background: "none", border: "none", color: "var(--tx1)", outline: "none" }}
           />
           <kbd onClick={onClose}
@@ -112,7 +125,7 @@ export function GlobalSearch({ gps, onClose, onGpClick, onFundClick, onMeetingCl
         ) : query.length > 0 ? (
           <div style={{ padding: "2.5rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.85rem" }}>No results for "{query}"</div>
         ) : (
-          <div style={{ padding: "1.75rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.82rem" }}>Type to search across all GPs, funds and meetings</div>
+          <div style={{ padding: "1.75rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.82rem" }}>Type to search across all GPs, funds, meetings and agents</div>
         )}
 
         {/* Footer hint */}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS, PIPELINE_STAGES } from '../constants.js';
 import { IS, ISFilled, TA, TAFilled, btnBase, btnPrimary, btnGhost, btnDanger } from '../theme.js';
 import { fmt, fmtM } from '../utils.js';
@@ -261,7 +261,13 @@ function FundraisingTimeline({ fund, onSetDate }) {
 
 // ─── Dual-field metric card (e.g. "18.5% / 2.0x") ───────────────────────────
 function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, onSave2, readOnly }) {
-  const { editingId, setEditingId } = React.useContext(EditingContext);
+  const { editingId, setEditingId, registerMetric, unregisterMetric, nextMetricId } = React.useContext(EditingContext);
+
+  useEffect(() => {
+    if (readOnly) return;
+    registerMetric(id);
+    return () => unregisterMetric(id);
+  }, [id, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   const [tmp1, setTmp1] = useState(val1 || "");
   const [tmp2, setTmp2] = useState(val2 || "");
   const containerRef = useRef();
@@ -293,6 +299,7 @@ function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, on
           onKeyDown={e => {
             if (e.key === "Enter") { e.preventDefault(); commit(); }
             if (e.key === "Escape") { e.stopPropagation(); cancel(); }
+            if (e.key === "Tab") { e.preventDefault(); onSave1(tmp1); onSave2(tmp2); setEditingId(nextMetricId(id)); }
           }}>
           <input autoFocus value={tmp1} onChange={e => setTmp1(e.target.value)}
             style={{ width: "4.5rem", background: "none", border: "none", outline: "none", color: "var(--tx1)", fontWeight: 600, fontSize: "0.875rem", fontFamily: "inherit" }}
@@ -311,7 +318,58 @@ function DualMetric({ id, label, val1, disp1, ph1, onSave1, val2, disp2, ph2, on
   );
 }
 
-export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage }) {
+// ─── Placement Agent tag + picker ─────────────────────────────────────────────
+function PATagPicker({ attachedPA, placementAgents, onChange, onOpen }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <span onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+        style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", background: "rgba(167,139,250,0.12)", border: "1px solid rgba(167,139,250,0.3)", borderRadius: "20px", padding: "0.15rem 0.6rem", fontSize: "0.72rem", color: attachedPA ? "#a78bfa" : "var(--tx5)", fontWeight: attachedPA ? 600 : 400, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+        🤝 {attachedPA ? attachedPA.name : "None"}
+      </span>
+      {open && (
+        <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.4rem", zIndex: 2000, boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "200px" }}>
+          <div style={{ color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", padding: "0.2rem 0.4rem 0.5rem" }}>Placement Agent</div>
+          <div onClick={() => { onChange(null); setOpen(false); }}
+            style={{ display: "flex", alignItems: "center", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: !attachedPA ? "var(--subtle)" : "none" }}
+            onMouseEnter={e => { if (attachedPA) e.currentTarget.style.background = "var(--hover)"; }}
+            onMouseLeave={e => { if (attachedPA) e.currentTarget.style.background = "none"; }}>
+            <span style={{ color: "var(--tx5)", fontSize: "0.8rem", fontStyle: "italic" }}>None</span>
+            {!attachedPA && <span style={{ marginLeft: "auto", color: "var(--tx4)", fontSize: "0.7rem" }}>✓</span>}
+          </div>
+          {placementAgents.map(pa => (
+            <div key={pa.id} onClick={() => { onChange(pa.id); setOpen(false); }}
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: pa.id === attachedPA?.id ? "rgba(167,139,250,0.15)" : "none" }}
+              onMouseEnter={e => { if (pa.id !== attachedPA?.id) e.currentTarget.style.background = "var(--hover)"; }}
+              onMouseLeave={e => { if (pa.id !== attachedPA?.id) e.currentTarget.style.background = "none"; }}>
+              <span style={{ color: pa.id === attachedPA?.id ? "#a78bfa" : "var(--tx3)", fontSize: "0.8rem", flex: 1 }}>🤝 {pa.name}</span>
+              {pa.id === attachedPA?.id && <span style={{ color: "#a78bfa", fontSize: "0.7rem" }}>✓</span>}
+            </div>
+          ))}
+          {attachedPA && (
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: "0.25rem", paddingTop: "0.35rem" }}>
+              <div onClick={() => { onOpen?.(); setOpen(false); }}
+                style={{ display: "flex", alignItems: "center", padding: "0.35rem 0.6rem", borderRadius: "6px", cursor: "pointer", color: "var(--tx4)", fontSize: "0.75rem" }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+                onMouseLeave={e => e.currentTarget.style.background = "none"}>
+                Open PA profile →
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage, placementAgents = [], onPlacementAgentClick }) {
   const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [fundraisingExpanded, setFundraisingExpanded] = useState(null); // null = auto
@@ -382,6 +440,22 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
     onEditingChange?.(id);
   };
 
+  // Ordered registry for Tab-to-next navigation across InlineMetric cards
+  const metricOrderRef = useRef([]);
+  const registerMetric = useCallback((id) => {
+    if (!metricOrderRef.current.includes(id)) {
+      metricOrderRef.current = [...metricOrderRef.current, id];
+    }
+  }, []);
+  const unregisterMetric = useCallback((id) => {
+    metricOrderRef.current = metricOrderRef.current.filter(x => x !== id);
+  }, []);
+  const nextMetricId = useCallback((currentId) => {
+    const idx = metricOrderRef.current.indexOf(currentId);
+    if (idx === -1 || idx === metricOrderRef.current.length - 1) return null;
+    return metricOrderRef.current[idx + 1];
+  }, []);
+
   if (editing) {
     return (
       <Overlay onClose={() => setEditing(false)} width="680px" zIndex={zIndex}>
@@ -404,7 +478,7 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
   );
 
   return (
-    <EditingContext.Provider value={{ editingId, setEditingId: setEditingIdWithNotify }}>
+    <EditingContext.Provider value={{ editingId, setEditingId: setEditingIdWithNotify, registerMetric, unregisterMetric, nextMetricId }}>
     <Overlay onClose={onClose} width="720px" zIndex={zIndex}>
       <OverlayHeader
         title={fund.name}
@@ -601,11 +675,25 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
           const lbl = { color: "var(--tx4)", fontSize: "0.68rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.3rem" };
           return (
             <>
-              <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", marginBottom: "1rem", flexWrap: "wrap" }}>
                 <div><div style={lbl}>Rating</div><ScorePicker score={fund.score} size="lg" onChange={v => patch({ score: v })} /></div>
                 <div><div style={lbl}>Responsible</div><OwnerPicker owner={fund.owner} owners={owners} onChange={v => patch({ owner: v || null })} placeholder={gp?.owner} /></div>
                 <div><div style={lbl}>Pipeline</div><StagePicker stage={currentStage} onChange={v => onPipelineStage?.(fund.id, v)} /></div>
                 <div><div style={lbl}>Status</div><StatusPicker status={fund.status} onChange={v => patch({ status: v })} /></div>
+                {placementAgents.length > 0 && (() => {
+                  const attachedPA = placementAgents.find(p => p.id === fund.placementAgentId);
+                  return (
+                    <div style={{ position: "relative" }}>
+                      <div style={lbl}>Placement Agent</div>
+                      <PATagPicker
+                        attachedPA={attachedPA}
+                        placementAgents={placementAgents}
+                        onChange={v => patch({ placementAgentId: v || null })}
+                        onOpen={() => onPlacementAgentClick && attachedPA && onPlacementAgentClick(attachedPA)}
+                      />
+                    </div>
+                  );
+                })()}
               </div>
             </>
           );
@@ -715,21 +803,22 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
             <button onClick={() => onAddMeeting && onAddMeeting(fund.id)} style={{ ...btnGhost, fontSize: "0.75rem", color: "#60a5fa", borderColor: "#1d4ed8" }}>+ Log Meeting</button>
           </div>
           {fundMeetings.length === 0 && <div style={{ color: "var(--tx4)", fontSize: "0.875rem", textAlign: "center", padding: "1rem" }}>No meetings logged for this fund yet.</div>}
-          <div style={{ display: "grid", gap: "0.5rem" }}>
-            {fundMeetings.slice(0, 5).map(m => (
-              <div key={m.id} onClick={() => onMeetingClick(m)} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "0.75rem 1rem", cursor: "pointer", transition: "border-color 0.15s" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border-hi)"}
-                onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.25rem", flexWrap: "wrap" }}>
-                  <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.8125rem" }}>{fmt(m.date)}</span>
-                  <span style={{ background: m.type === "Virtual" ? "var(--pill-bg-2)" : "var(--subtle)", color: m.type === "Virtual" ? "var(--pill-c-2)" : "var(--tx3)", borderRadius: "4px", padding: "0.05rem 0.4rem", fontSize: "0.7rem" }}>{m.type}</span>
-                  {m.location && <span style={{ color: "var(--tx4)", fontSize: "0.75rem" }}>📍 {m.location}</span>}
+          {fundMeetings.length > 0 && (
+            <div style={{ border: "1px solid var(--border)", borderRadius: "6px", overflow: "hidden" }}>
+              {fundMeetings.map((m, i) => (
+                <div key={m.id} onClick={() => onMeetingClick(m)}
+                  style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.75rem", borderBottom: i < fundMeetings.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer", background: "transparent" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span style={{ color: "var(--tx4)", flexShrink: 0, minWidth: "68px", fontSize: "0.72rem" }}>{fmt(m.date)}</span>
+                  <span style={{ color: "var(--tx1)", fontWeight: 500, flex: "1 1 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.775rem" }}>{m.topic || "—"}</span>
+                  <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>{m.type}</span>
+                  {m.location && <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem", maxWidth: "90px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.location}</span>}
+                  {m.attendeesUs?.length > 0 && <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem", maxWidth: "100px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.attendeesUs.join(", ")}</span>}
                 </div>
-                <div style={{ color: "var(--tx2)", fontSize: "0.8125rem", fontWeight: 500 }}>{m.topic}</div>
-                {m.notes && <div style={{ color: "var(--tx4)", fontSize: "0.75rem", marginTop: "0.2rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.notes}</div>}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
         </>}
       </div>

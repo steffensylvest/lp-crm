@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { PIPELINE_STAGES } from '../constants.js';
 import { fmt, fmtM } from '../utils.js';
 import { ScoreBadge, StatusPill } from './Badges.jsx';
-import { FilterDropdown } from './FilterDropdown.jsx';
+import { ScorePicker, StatusPicker, OwnerPicker, StagePicker } from './Pickers.jsx';
 
 const COL = {
   name:     { label: "Name",         w: "auto",   align: "left"  },
@@ -17,12 +17,13 @@ const COL = {
   last:     { label: "Last Meeting", w: "110px",  align: "left"  },
 };
 
-export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundClick, onMeetingClick, autoExpand }) {
+export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundClick, onMeetingClick, autoExpand, onUpdateGP, onUpdatePipeline, owners = [], placementAgents = [], onPaClick }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [sortCol, setSortCol] = useState("score");
   const [sortDir, setSortDir] = useState("asc");
   const [globalExpand, setGlobalExpand] = useState(false);
   const [focusedIdx, setFocusedIdx] = useState(null);
+  const [editMode, setEditMode] = useState(false);
 
   // Reset focus when filtered list changes
   useEffect(() => { setFocusedIdx(null); }, [filtered]);
@@ -86,7 +87,7 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
       const row = visibleRows[focusedIdx];
       if (!row) return;
       if (row.type === "gp") onGpClick(row.gp);
-      else onFundClick(row.fund, row.gp);
+      else if (!editMode) onFundClick(row.fund, row.gp);
     } else if ((e.key === " " || e.key === "ArrowRight") && focusedIdx !== null) {
       const row = visibleRows[focusedIdx];
       if (row?.type !== "gp") return;
@@ -97,7 +98,6 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
       if (!row) return;
       e.preventDefault();
       if (row.type === "fund") {
-        // Jump to parent GP row and collapse
         const gpIdx = visibleRows.findIndex(r => r.type === "gp" && r.id === row.gp.id);
         setFocusedIdx(gpIdx >= 0 ? gpIdx : focusedIdx);
         if (expanded.has(row.gp.id)) toggleGP(row.gp.id);
@@ -129,17 +129,21 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
     );
   };
 
-  const StatusCell = ({ status }) => <StatusPill status={status} />;
-
   const tdBase = { padding: "0.42rem 0.75rem", fontSize: "0.8rem", borderBottom: "1px solid var(--border)", verticalAlign: "middle" };
   const tdStickyBase = { position: "sticky", left: 0, zIndex: 1 };
 
-  if (filtered.length === 0) return (
+  // Helper: update a single fund within its GP
+  const patchFund = (gp, fundId, patch) => {
+    if (!onUpdateGP) return;
+    onUpdateGP({ ...gp, funds: (gp.funds || []).map(f => f.id === fundId ? { ...f, ...patch } : f) });
+  };
+
+  if (filtered.length === 0 && placementAgents.length === 0) return (
     <div style={{ textAlign: "center", color: "var(--tx4)", padding: "4rem" }}>No results found.</div>
   );
 
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" }}>
+    <div style={{ border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden", height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Table toolbar */}
       <div style={{ display: "flex", alignItems: "center", padding: "0.6rem 0.75rem", background: "var(--row)", borderBottom: "1px solid var(--border)", gap: "0.75rem" }}>
         <span style={{ color: "var(--tx4)", fontSize: "0.72rem" }}>
@@ -148,17 +152,23 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
           <strong style={{ color: "var(--tx2)" }}>{filtered.reduce((s, g) => s + (g.funds||[]).length, 0)}</strong> funds
         </span>
         <span style={{ color: "var(--tx5)", fontSize: "0.68rem", marginLeft: "0.5rem" }}>↑↓ navigate · Enter open · ← collapse</span>
-        <button onClick={toggleAll}
-          style={{ background: "none", border: "1px solid var(--border)", borderRadius: "5px", color: "var(--tx4)", padding: "0.2rem 0.55rem", fontSize: "0.7rem", cursor: "pointer", marginLeft: "auto" }}>
-          {globalExpand ? "⊟ Collapse all" : "⊞ Expand all"}
-        </button>
+        <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
+          <button onClick={() => setEditMode(m => !m)}
+            style={{ background: editMode ? "#1d4ed820" : "none", border: `1px solid ${editMode ? "#3b82f6" : "var(--border)"}`, borderRadius: "5px", color: editMode ? "#60a5fa" : "var(--tx4)", padding: "0.2rem 0.6rem", fontSize: "0.7rem", cursor: "pointer", fontWeight: editMode ? 600 : 400 }}>
+            {editMode ? "✓ Done editing" : "✏ Edit"}
+          </button>
+          <button onClick={toggleAll}
+            style={{ background: "none", border: "1px solid var(--border)", borderRadius: "5px", color: "var(--tx4)", padding: "0.2rem 0.55rem", fontSize: "0.7rem", cursor: "pointer" }}>
+            {globalExpand ? "⊟ Collapse all" : "⊞ Expand all"}
+          </button>
+        </div>
       </div>
 
-      {/* Scrollable table — tabIndex makes it keyboard-focusable */}
+      {/* Scrollable table */}
       <div
         tabIndex={0}
         onKeyDown={handleKeyDown}
-        style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 380px)", minHeight: "300px", outline: "none" }}
+        style={{ overflowX: "auto", overflowY: "auto", flex: 1, minHeight: "300px", outline: "none" }}
       >
         <table style={{ width: "100%", minWidth: "900px", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <colgroup>
@@ -220,11 +230,16 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                           {gp.name}
                           {gp.hq && <span style={{ color: "var(--tx5)", fontSize: "0.7rem", fontWeight: 400, marginLeft: "0.4rem" }}>{gp.hq}</span>}
                         </span>
-                        {gp.owner && (
-                          <span style={{ background: "var(--subtle)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontSize: "0.62rem", color: "var(--tx4)", flexShrink: 0, maxWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {gp.owner}
-                          </span>
-                        )}
+                        {/* Owner — picker in edit mode, badge otherwise */}
+                        <div onClick={e => e.stopPropagation()} style={{ flexShrink: 0 }}>
+                          {editMode && onUpdateGP ? (
+                            <OwnerPicker owner={gp.owner} owners={owners} onChange={v => onUpdateGP({ ...gp, owner: v })} />
+                          ) : gp.owner ? (
+                            <span style={{ background: "var(--subtle)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontSize: "0.62rem", color: "var(--tx4)", maxWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
+                              {gp.owner}
+                            </span>
+                          ) : null}
+                        </div>
                         {fundraisingCount > 0 && (
                           <span style={{ background: "var(--pill-bg-1)", color: "var(--pill-c-1)", borderRadius: "3px", padding: "0.05rem 0.35rem", fontSize: "0.62rem", fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>
                             {fundraisingCount} ↑
@@ -232,9 +247,12 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                         )}
                       </div>
                     </td>
-                    {/* Score */}
-                    <td style={{ ...tdBase, textAlign: "center", background: gpFocused ? "var(--subtle)" : "" }}>
-                      <ScoreBadge score={gp.score} />
+                    {/* Score — picker in edit mode */}
+                    <td style={{ ...tdBase, textAlign: "center", background: gpFocused ? "var(--subtle)" : "" }}
+                      onClick={e => e.stopPropagation()}>
+                      {editMode && onUpdateGP
+                        ? <ScorePicker score={gp.score} onChange={v => onUpdateGP({ ...gp, score: v })} />
+                        : <ScoreBadge score={gp.score} />}
                     </td>
                     {/* Status — show fund count */}
                     <td style={{ ...tdBase, background: gpFocused ? "var(--subtle)" : "" }}>
@@ -281,15 +299,17 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                       ? Math.min(100, Math.round(parseFloat(f.raisedSize) / parseFloat(f.targetSize) * 100))
                       : null;
                     const fundFocused = focusedIdx !== null && visibleRows[focusedIdx]?.type === "fund" && visibleRows[focusedIdx]?.id === f.id;
+                    const stageId = pipeline.find(p => p.fundId === f.id)?.stage;
+                    const stage = stageId ? PIPELINE_STAGES.find(s => s.id === stageId) : null;
 
                     return (
                       <tr key={f.id}
                         onClick={e => {
                           e.stopPropagation();
                           setFocusedIdx(visibleRows.findIndex(r => r.type === "fund" && r.id === f.id));
-                          onFundClick(f, gp);
+                          if (!editMode) onFundClick(f, gp);
                         }}
-                        style={{ cursor: "pointer", background: fundFocused ? "var(--subtle)" : "var(--row)" }}
+                        style={{ cursor: editMode ? "default" : "pointer", background: fundFocused ? "var(--subtle)" : "var(--row)" }}
                         onMouseEnter={e => { Array.from(e.currentTarget.cells).forEach(c => { c.style.background = "var(--hover)"; }); }}
                         onMouseLeave={e => { Array.from(e.currentTarget.cells).forEach((c, i) => { c.style.background = i === 0 ? (fundFocused ? "var(--subtle)" : "var(--row)") : (fundFocused ? "var(--subtle)" : ""); }); }}
                       >
@@ -297,7 +317,9 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                         <td style={{ ...tdBase, ...tdStickyBase, paddingLeft: "2rem", background: fundFocused ? "var(--subtle)" : "var(--row)", boxShadow: fundFocused ? "inset 3px 0 0 #3b82f6" : "none" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", minWidth: 0 }}>
                             <span style={{ color: "var(--border-hi)", fontSize: "0.68rem", flexShrink: 0 }}>└</span>
-                            <span style={{ color: "var(--tx2)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
+                            <span
+                              style={{ color: "var(--tx2)", fontSize: "0.8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500, cursor: "pointer", textDecoration: editMode ? "none" : undefined }}
+                              onClick={e => { e.stopPropagation(); onFundClick(f, gp); }}>
                               {f.name}
                             </span>
                             {f.invested && <span style={{ color: "var(--invested-c)", fontSize: "0.65rem", flexShrink: 0 }}>✓</span>}
@@ -308,28 +330,39 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                             )}
                           </div>
                         </td>
-                        <td style={{ ...tdBase, textAlign: "center", background: fundFocused ? "var(--subtle)" : "" }}>
-                          <ScoreBadge score={f.score} />
+                        {/* Score — picker in edit mode */}
+                        <td style={{ ...tdBase, textAlign: "center", background: fundFocused ? "var(--subtle)" : "" }}
+                          onClick={e => e.stopPropagation()}>
+                          {editMode && onUpdateGP
+                            ? <ScorePicker score={f.score} onChange={v => patchFund(gp, f.id, { score: v })} />
+                            : <ScoreBadge score={f.score} />}
                         </td>
-                        <td style={{ ...tdBase, background: fundFocused ? "var(--subtle)" : "" }}>
-                          <div>
-                            <StatusPill status={f.status} />
-                            {pct !== null && (
-                              <div style={{ marginTop: "0.2rem", background: "var(--subtle)", borderRadius: "2px", height: "3px", width: "80px", overflow: "hidden" }}>
-                                <div style={{ width: `${pct}%`, height: "100%", background: "#3b82f6", borderRadius: "2px" }} />
-                              </div>
-                            )}
-                          </div>
+                        {/* Status — picker in edit mode */}
+                        <td style={{ ...tdBase, background: fundFocused ? "var(--subtle)" : "" }}
+                          onClick={e => e.stopPropagation()}>
+                          {editMode && onUpdateGP ? (
+                            <StatusPicker status={f.status} onChange={v => patchFund(gp, f.id, { status: v })} />
+                          ) : (
+                            <div>
+                              <StatusPill status={f.status} />
+                              {pct !== null && (
+                                <div style={{ marginTop: "0.2rem", background: "var(--subtle)", borderRadius: "2px", height: "3px", width: "80px", overflow: "hidden" }}>
+                                  <div style={{ width: `${pct}%`, height: "100%", background: "#3b82f6", borderRadius: "2px" }} />
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
-                        {/* Pipeline stage */}
-                        <td style={{ ...tdBase, background: fundFocused ? "var(--subtle)" : "" }}>
-                          {(() => {
-                            const stageId = pipeline.find(p => p.fundId === f.id)?.stage;
-                            const stage = stageId ? PIPELINE_STAGES.find(s => s.id === stageId) : null;
-                            return stage
-                              ? <span style={{ background: stage.bg, color: stage.ac, border: `1px solid ${stage.bd}`, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>{stage.label}</span>
-                              : <span style={{ color: "var(--tx5)" }}>—</span>;
-                          })()}
+                        {/* Pipeline stage — picker in edit mode */}
+                        <td style={{ ...tdBase, background: fundFocused ? "var(--subtle)" : "" }}
+                          onClick={e => e.stopPropagation()}>
+                          {editMode && onUpdatePipeline ? (
+                            <StagePicker stage={stageId} onChange={v => onUpdatePipeline(f.id, v, gp)} />
+                          ) : stage ? (
+                            <span style={{ background: stage.bg, color: stage.ac, border: `1px solid ${stage.bd}`, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.7rem", whiteSpace: "nowrap" }}>{stage.label}</span>
+                          ) : (
+                            <span style={{ color: "var(--tx5)" }}>—</span>
+                          )}
                         </td>
                         <td style={{ ...tdBase, background: fundFocused ? "var(--subtle)" : "" }}>
                           <span style={{ color: "var(--tx3)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
@@ -365,6 +398,45 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                 </React.Fragment>
               );
             })}
+
+            {/* ── Placement Agent rows (flat, no drilldown) ── */}
+            {placementAgents.length > 0 && (
+              <>
+                <tr>
+                  <td colSpan={10} style={{ ...tdBase, background: "var(--subtle)", padding: "0.3rem 0.75rem" }}>
+                    <span style={{ color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Placement Agents</span>
+                  </td>
+                </tr>
+                {placementAgents.map(pa => {
+                  // Count funds represented
+                  const fundCount = allGps.reduce((n, g) => n + (g.funds||[]).filter(f => f.placementAgentId === pa.id).length, 0);
+                  return (
+                    <tr key={pa.id}
+                      onClick={() => onPaClick && onPaClick(pa)}
+                      style={{ cursor: "pointer", background: "transparent" }}
+                      onMouseEnter={e => Array.from(e.currentTarget.cells).forEach(c => { c.style.background = "var(--hover)"; })}
+                      onMouseLeave={e => Array.from(e.currentTarget.cells).forEach(c => { c.style.background = ""; })}
+                    >
+                      <td style={{ ...tdBase, ...tdStickyBase, paddingLeft: "0.75rem", background: "transparent" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <span style={{ fontSize: "0.65rem" }}>🤝</span>
+                          <span style={{ fontWeight: 600, color: "var(--tx1)", fontSize: "0.8375rem" }}>{pa.name}</span>
+                          {pa.hq && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>{pa.hq}</span>}
+                        </div>
+                      </td>
+                      <td style={tdBase} />
+                      <td style={{ ...tdBase, color: "var(--tx4)", fontSize: "0.75rem" }}>
+                        {fundCount > 0 ? `${fundCount} fund${fundCount !== 1 ? "s" : ""}` : "—"}
+                      </td>
+                      <td colSpan={7} style={{ ...tdBase, color: "var(--tx5)", fontSize: "0.75rem" }}>
+                        {pa.contact || ""}
+                        {pa.contactEmail ? (pa.contact ? ` · ${pa.contactEmail}` : pa.contactEmail) : ""}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </>
+            )}
           </tbody>
         </table>
       </div>

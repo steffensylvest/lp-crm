@@ -1,6 +1,6 @@
 # LP CRM — Data Model
 
-The database is **SQLite** (local dev) or **Snowflake** (production), managed via SQLAlchemy ORM in `python-server/models.py`. The API always returns and accepts JSON in the same shape as the original `server/data.json` for full frontend compatibility.
+The database is **SQLite** (local dev) or **Snowflake** (production), managed via SQLAlchemy ORM in `python-server/models.py`.
 
 ---
 

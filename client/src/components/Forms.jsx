@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
-import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES } from '../constants.js';
+import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS } from '../constants.js';
+import { useSettings } from '../settingsContext.js';
 import { IS, ISFilled, TA, TAFilled, btnBase, btnPrimary, btnGhost, btnDanger } from '../theme.js';
 import { uid } from '../utils.js';
 import { Chip, SectorChip, SubStratChip } from './Badges.jsx';
@@ -130,12 +131,44 @@ export function GPForm({ initial, onSave, onClose, onDelete, owners = [] }) {
   );
 }
 
+// ─── Placement Agent Form ─────────────────────────────────────────────────────
+export function PAForm({ initial, onSave, onClose, onDelete }) {
+  const [d, setD] = useState(initial || { name: "", hq: "", website: "", contact: "", contactEmail: "", notes: "" });
+  const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+  const fi = (v) => v ? ISFilled : IS;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 1rem" }}>
+      <Field label="Firm Name"><input style={fi(d.name)} value={d.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Lazard" /></Field>
+      <Field label="Headquarters" half><input style={fi(d.hq)} value={d.hq} onChange={e => set("hq", e.target.value)} placeholder="City, Country" /></Field>
+      <Field label="Website" half><input style={fi(d.website)} value={d.website} onChange={e => set("website", e.target.value)} placeholder="firm.com" /></Field>
+      <Field label="Primary Contact" half><input style={fi(d.contact)} value={d.contact} onChange={e => set("contact", e.target.value)} placeholder="Name" /></Field>
+      <Field label="Contact Email" half><input style={fi(d.contactEmail)} value={d.contactEmail} onChange={e => set("contactEmail", e.target.value)} placeholder="email@firm.com" /></Field>
+      <Field label="Notes"><textarea style={d.notes ? TAFilled : TA} value={d.notes} onChange={e => set("notes", e.target.value)} placeholder="Notes…" /></Field>
+      <div style={{ gridColumn: "span 2", display: "flex", gap: "0.75rem", justifyContent: "space-between", paddingTop: "0.5rem", alignItems: "center" }}>
+        {onDelete && (
+          <button onClick={() => { if (confirm("Delete this Placement Agent?")) onDelete(); }} style={{ ...btnDanger, padding: "0.45rem 0.9rem", fontSize: "0.8125rem" }}>Delete…</button>
+        )}
+        <div style={{ display: "flex", gap: "0.75rem", marginLeft: "auto" }}>
+          <button onClick={onClose} style={btnGhost}>Cancel</button>
+          <button onClick={() => onSave(d)} style={btnPrimary}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Fund Form ────────────────────────────────────────────────────────────────
 export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOwner }) {
-  const empty = { name: "", series: "", strategy: "Buyout", subStrategy: "", sectors: [], vintage: "", targetSize: "", hardCap: "", raisedSize: "", raisedDate: "", finalSize: "", currency: "USD", status: "Fundraising", launchDate: "", firstCloseDate: "", nextCloseDate: "", finalCloseDate: "", nextMarket: "", score: "C", owner: "", notes: "", invested: false, investmentAmount: "", investmentCurrency: "USD" };
+  const { settings } = useSettings();
+  const effectiveSectors = settings.sectors ?? SECTOR_OPTIONS;
+  const effectiveStrategies = settings.strategies ?? STRATEGY_OPTIONS;
+  const effectiveSubPresets = settings.subStrategyPresets ?? SUB_STRATEGY_PRESETS;
+  const effectiveStatuses = settings.statusOptions ?? STATUS_OPTIONS;
+
+  const empty = { name: "", series: "", strategy: effectiveStrategies[0] || "Buyout", subStrategy: "", sectors: [], vintage: "", targetSize: "", hardCap: "", raisedSize: "", raisedDate: "", finalSize: "", currency: "USD", status: effectiveStatuses[0] || "Fundraising", launchDate: "", firstCloseDate: "", nextCloseDate: "", finalCloseDate: "", nextMarket: "", score: "C", owner: "", notes: "", invested: false, investmentAmount: "", investmentCurrency: "USD" };
   const [d, setD] = useState(initial || empty);
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
-  const subPresets = SUB_STRATEGY_PRESETS[d.strategy] || [];
+  const subPresets = effectiveSubPresets[d.strategy] || [];
   const fi = (v) => v ? ISFilled : IS;
   const sec = (label, color, mt = "1.25rem") => (
     <div style={{ gridColumn: "span 2", display: "flex", alignItems: "center", gap: "0.6rem", marginTop: mt, marginBottom: "0.1rem" }}>
@@ -153,7 +186,7 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
       <Field label="Fund Series" half><input style={fi(d.series)} value={d.series} onChange={e => set("series", e.target.value)} placeholder="e.g. Blackstone Capital Partners" /></Field>
       <Field label="Status" half>
         <select style={ISFilled} value={d.status} onChange={e => set("status", e.target.value)}>
-          {["Pre-Marketing","Fundraising","Closed","Deployed","Monitoring","Exiting"].map(s => <option key={s}>{s}</option>)}
+          {effectiveStatuses.map(s => <option key={s}>{s}</option>)}
         </select>
       </Field>
       <Field label="Fund Score" half>
@@ -170,7 +203,7 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
       {sec("Asset Class", "#f59e0b")}
       <Field label="Strategy" half>
         <select style={ISFilled} value={d.strategy} onChange={e => { set("strategy", e.target.value); set("subStrategy", ""); }}>
-          {STRATEGY_OPTIONS.map(s => <option key={s}>{s}</option>)}
+          {effectiveStrategies.map(s => <option key={s}>{s}</option>)}
         </select>
       </Field>
       <Field label="Sub-Strategy" half>
@@ -179,7 +212,7 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
           {subPresets.map(s => <option key={s}>{s}</option>)}
         </select>
       </Field>
-      <Field label="Sector Focus"><TagPicker selected={d.sectors || []} options={SECTOR_OPTIONS} onChange={v => set("sectors", v)} /></Field>
+      <Field label="Sector Focus"><TagPicker selected={d.sectors || []} options={effectiveSectors} onChange={v => set("sectors", v)} /></Field>
 
       {/* ── Fundraising ── */}
       {sec("Fundraising", "#3b82f6")}

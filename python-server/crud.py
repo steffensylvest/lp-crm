@@ -10,6 +10,7 @@ Public API:
     get_gp_change_history(db, gp_id)           → list[dict]
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -17,8 +18,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from models import (
-    ChangeLog, Fund, FundPerformanceSnapshot, FundRaisedSnapshot,
-    FundSector, GP, Meeting, PipelineItem, Todo,
+    AppSettings, ChangeLog, Fund, FundPerformanceSnapshot, FundRaisedSnapshot,
+    FundSector, GP, Meeting, PipelineItem, PlacementAgent, Todo,
 )
 
 # ── Change-detection config ───────────────────────────────────────────────────
@@ -64,6 +65,18 @@ def _norm(v):
 
 # ── Serialisers ───────────────────────────────────────────────────────────────
 
+def _pa_to_dict(pa):
+    return {
+        "id":           pa.id,
+        "name":         pa.name,
+        "hq":           pa.hq,
+        "website":      pa.website,
+        "contact":      pa.contact,
+        "contactEmail": pa.contact_email,
+        "notes":        pa.notes,
+    }
+
+
 def _fund_to_dict(fund):
     return {
         "id":                 fund.id,
@@ -77,6 +90,10 @@ def _fund_to_dict(fund):
         "status":             fund.status,
         "score":              fund.score,
         "notes":              fund.notes,
+        "raisedDate":         fund.raised_date,
+        "nextMarket":         fund.next_market,
+        "expectedAmount":     fund.expected_amount,
+        "icDate":             fund.ic_date,
         "targetSize":         fund.target_size,
         "raisedSize":         fund.raised_size,
         "finalSize":          fund.final_size,
@@ -98,20 +115,23 @@ def _fund_to_dict(fund):
         "nav":                fund.nav,
         "undrawnValue":       fund.undrawn_value,
         "perfDate":           fund.perf_date,
+        "placementAgentId":   fund.placement_agent_id,
     }
 
 
 def _meeting_to_dict(meeting):
     return {
-        "id":       meeting.id,
-        "date":     meeting.date,
-        "type":     meeting.type,
-        "location": meeting.location,
-        "topic":    meeting.topic,
-        "notes":    meeting.notes,
-        "fundId":   meeting.fund_id,
-        "loggedBy": meeting.logged_by,
-        "loggedAt": meeting.logged_at,
+        "id":            meeting.id,
+        "date":          meeting.date,
+        "type":          meeting.type,
+        "location":      meeting.location,
+        "topic":         meeting.topic,
+        "notes":         meeting.notes,
+        "attendeesThem": json.loads(meeting.attendees_them) if meeting.attendees_them else [],
+        "attendeesUs":   json.loads(meeting.attendees_us)   if meeting.attendees_us   else [],
+        "fundId":        meeting.fund_id,
+        "loggedBy":      meeting.logged_by,
+        "loggedAt":      meeting.logged_at,
     }
 
 
@@ -180,9 +200,12 @@ def _change_to_dict(c):
 # ── Bulk read ─────────────────────────────────────────────────────────────────
 
 def get_all_data(db):
-    gps      = db.query(GP).all()
-    pipeline = db.query(PipelineItem).all()
-    todos    = db.query(Todo).all()
+    gps               = db.query(GP).all()
+    pipeline          = db.query(PipelineItem).all()
+    todos             = db.query(Todo).all()
+    placement_agents  = db.query(PlacementAgent).all()
+    settings_row      = db.query(AppSettings).filter_by(id="singleton").first()
+    settings          = json.loads(settings_row.data) if settings_row else {}
 
     return {
         "gps": [
@@ -190,6 +213,7 @@ def get_all_data(db):
                 "id":           gp.id,
                 "name":         gp.name,
                 "hq":           gp.hq,
+                "website":      gp.website,
                 "score":        gp.score,
                 "owner":        gp.owner,
                 "contact":      gp.contact,
@@ -200,8 +224,10 @@ def get_all_data(db):
             }
             for gp in gps
         ],
-        "pipeline": [_pipeline_to_dict(p) for p in pipeline],
-        "todos":    [_todo_to_dict(t)     for t in todos],
+        "pipeline":          [_pipeline_to_dict(p) for p in pipeline],
+        "todos":             [_todo_to_dict(t)     for t in todos],
+        "placementAgents":   [_pa_to_dict(pa)      for pa in placement_agents],
+        "settings":          settings,
     }
 
 
@@ -424,6 +450,7 @@ def upsert_all_data(db, data):
         db.query(PipelineItem).delete(synchronize_session=False)
         db.query(Todo).delete(synchronize_session=False)
         db.query(Fund).delete(synchronize_session=False)
+        db.query(PlacementAgent).delete(synchronize_session=False)
         db.query(GP).delete(synchronize_session=False)
         db.flush()
         # Expunge all to clear SQLAlchemy's identity map — prevents "conflicts
@@ -431,11 +458,24 @@ def upsert_all_data(db, data):
         # same PKs that were loaded during change detection above.
         db.expunge_all()
 
+        for pa in data.get("placementAgents", []):
+            db.add(PlacementAgent(
+                id            = pa["id"],
+                name          = pa.get("name", ""),
+                hq            = pa.get("hq"),
+                website       = pa.get("website"),
+                contact       = pa.get("contact"),
+                contact_email = pa.get("contactEmail"),
+                notes         = pa.get("notes"),
+            ))
+        db.flush()  # PAs must exist before funds reference them
+
         for gp_data in data.get("gps", []):
             db.add(GP(
                 id            = gp_data["id"],
                 name          = gp_data.get("name", ""),
                 hq            = gp_data.get("hq"),
+                website       = gp_data.get("website"),
                 score         = gp_data.get("score"),
                 owner         = gp_data.get("owner"),
                 contact       = gp_data.get("contact"),
@@ -456,6 +496,10 @@ def upsert_all_data(db, data):
                     status              = f.get("status"),
                     score               = f.get("score"),
                     notes               = f.get("notes"),
+                    raised_date         = f.get("raisedDate"),
+                    next_market         = f.get("nextMarket"),
+                    expected_amount     = f.get("expectedAmount") or None,
+                    ic_date             = f.get("icDate"),
                     target_size         = f.get("targetSize") or None,
                     raised_size         = f.get("raisedSize") or None,
                     final_size          = f.get("finalSize")  or None,
@@ -477,6 +521,7 @@ def upsert_all_data(db, data):
                     nav                 = f.get("nav"),
                     undrawn_value       = f.get("undrawnValue"),
                     perf_date           = f.get("perfDate"),
+                    placement_agent_id  = f.get("placementAgentId") or None,
                 ))
 
                 for sector in f.get("sectors", []):
@@ -484,16 +529,18 @@ def upsert_all_data(db, data):
 
             for m in gp_data.get("meetings", []):
                 db.add(Meeting(
-                    id        = m["id"],
-                    gp_id     = gp_data["id"],
-                    fund_id   = m.get("fundId"),
-                    date      = m.get("date"),
-                    type      = m.get("type"),
-                    location  = m.get("location"),
-                    topic     = m.get("topic"),
-                    notes     = m.get("notes"),
-                    logged_by = m.get("loggedBy"),
-                    logged_at = m.get("loggedAt"),
+                    id             = m["id"],
+                    gp_id          = gp_data["id"],
+                    fund_id        = m.get("fundId"),
+                    date           = m.get("date"),
+                    type           = m.get("type"),
+                    location       = m.get("location"),
+                    topic          = m.get("topic"),
+                    notes          = m.get("notes"),
+                    attendees_them = json.dumps(m.get("attendeesThem") or []),
+                    attendees_us   = json.dumps(m.get("attendeesUs")   or []),
+                    logged_by      = m.get("loggedBy"),
+                    logged_at      = m.get("loggedAt"),
                 ))
 
         # Flush GPs + funds to DB before inserting pipeline (FK: pipeline.fund_id → funds.id)
@@ -516,6 +563,14 @@ def upsert_all_data(db, data):
                 done       = bool(t.get("done", False)),
                 created_at = t.get("createdAt"),
             ))
+
+        # ── Settings (singleton upsert — never deleted) ───────────────────────
+        settings_data = data.get("settings", {})
+        settings_row = db.query(AppSettings).filter_by(id="singleton").first()
+        if settings_row:
+            settings_row.data = json.dumps(settings_data)
+        else:
+            db.add(AppSettings(id="singleton", data=json.dumps(settings_data)))
 
         db.commit()
 
