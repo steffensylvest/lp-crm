@@ -461,17 +461,4 @@ change_log                  (entity_id, related_fund_id)
 
 ### Schema gaps / TODO
 
-The following fields are used by the frontend but are **not yet present in `python-server/models.py` or `crud.py`**. They are silently dropped on every PUT save, meaning data entered in the UI will not persist:
-
-| Table | Missing column | Frontend field | Priority |
-|-------|---------------|----------------|----------|
-| `gps` | `website` | `gp.website` (GPForm) | Low |
-| `funds` | `owner` | `fund.owner` — Responsible person | **High** |
-| `funds` | `raised_date` | `fund.raisedDate` — Raised As Of | Medium |
-| `funds` | `next_market` | `fund.nextMarket` — Next Expected in Market | Medium |
-| `funds` | `expected_amount` | `fund.expectedAmount` — Planned commitment | Medium |
-| `funds` | `ic_date` | `fund.icDate` — IC Date | Medium |
-| `meetings` | `attendees_them` | `meeting.attendeesThem` (JSON array) | Medium |
-| `meetings` | `attendees_us` | `meeting.attendeesUs` (JSON array) | Medium |
-
-To fix: add each column to the relevant class in `models.py`, add to the `db.add(...)` call in `crud.py`'s `upsert_all_data`, and add to the corresponding `_*_to_dict` serialiser.
+No known gaps — all frontend fields are present in `models.py` and `crud.py`.

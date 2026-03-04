@@ -12,8 +12,6 @@ npm run dev               # starts Python server (3001) + Vite client (5173)
 npm run dev:server        # Python FastAPI server only
 npm run dev:client        # Vite client only
 
-# Legacy Node.js server (kept for reference, do not use)
-npm run dev:server:node
 ```
 
 > **IPv6 note:** The server binds to `0.0.0.0` (not just `127.0.0.1`) so macOS
