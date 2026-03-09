@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { IS, ISFilled, btnBase, btnGhost, btnDanger, btnPrimary } from '../theme.js';
 import { uid, now, fmt, fmtTs } from '../utils.js';
-import { loadGpChangeHistory } from '../api.js';
+import { loadAuditLog, loadMeetings, savePerson } from '../api.js';
+import { PersonDetailOverlay, PersonRow } from './PersonDetail.jsx';
 
 const GP_CHANGE_FIELD_LABELS = { score: "Rating", owner: "Responsible" };
 import { ScoreBadge, StatusPill, Chip, SectorChip, SubStratChip, InvestedBadge } from './Badges.jsx';
@@ -19,23 +20,36 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
   const [editMeeting, setEditMeeting] = useState(null);
   const [meetingFilter, setMeetingFilter] = useState(null);
   const [gpChangeHistory, setGpChangeHistory] = useState([]);
+  // v2 orgs have _v2=true and no embedded meetings — fetch them lazily
+  const isV2 = !!gp._v2;
+  const [v2Meetings, setV2Meetings] = useState(null); // null = not yet loaded
+  // People (org_person join objects with nested .person)
+  const [people, setPeople] = useState(() => gp.people ?? []);
+  const [selectedPerson, setSelectedPerson] = useState(null); // orgPerson being viewed
+  const [addingPerson, setAddingPerson] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    loadGpChangeHistory(gp.id).then(h => { if (!cancelled) setGpChangeHistory(h); });
+    loadAuditLog('organization', gp.id)
+      .then(h => { if (!cancelled) setGpChangeHistory(h); })
+      .catch(() => {});
+    if (isV2) {
+      loadMeetings({ org_id: gp.id }).then(ms => { if (!cancelled) setV2Meetings(ms || []); }).catch(() => setV2Meetings([]));
+    }
     return () => { cancelled = true; };
-  }, [gp.id]);
+  }, [gp.id, isV2]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      loadGpChangeHistory(gp.id).then(setGpChangeHistory);
+      loadAuditLog('organization', gp.id).then(setGpChangeHistory).catch(() => {});
     }, 1500);
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gp.score, gp.owner]);
 
   const funds = gp.funds || [];
-  const meetings = gp.meetings || [];
+  // Use lazily-loaded v2 meetings if available; fall back to embedded meetings
+  const meetings = v2Meetings ?? (gp.meetings || []);
   const sortedMeetings = [...meetings].sort((a,b) => new Date(b.date)-new Date(a.date));
 
   // Group funds by series
@@ -73,6 +87,13 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
 
   const lastMeeting = sortedMeetings[0];
 
+  if (selectedPerson) return <PersonDetailOverlay orgPerson={selectedPerson} orgName={gp.name} zIndex={zIndex + 50}
+    onClose={() => setSelectedPerson(null)}
+    onUpdated={(updatedPerson) => {
+      setPeople(prev => prev.map(op => (op.person?.id ?? op.id) === updatedPerson.id
+        ? { ...op, person: updatedPerson }
+        : op));
+    }} />;
   if (editGP) return <Overlay onClose={() => setEditGP(false)} width="580px" zIndex={zIndex}><OverlayHeader title="Edit GP" onClose={() => setEditGP(false)} /><div style={{ padding: "1.5rem" }}><GPForm initial={gp} onSave={(d) => { onUpdate({ ...gp, ...d }); setEditGP(false); }} onClose={() => setEditGP(false)} onDelete={() => { setEditGP(false); onClose(); onDeleteGP && onDeleteGP(gp.id); }} owners={owners} /></div></Overlay>;
   if (addFund || editFund) return <Overlay onClose={() => { setAddFund(false); setEditFund(null); }} width="680px" zIndex={zIndex}><OverlayHeader title={editFund ? "Edit Fund" : "Add Fund"} onClose={() => { setAddFund(false); setEditFund(null); }} /><div style={{ padding: "1.5rem" }}><FundForm initial={editFund} onSave={saveFund} onClose={() => { setAddFund(false); setEditFund(null); }} onDelete={editFund ? () => { deleteFund(editFund.id); setEditFund(null); } : undefined} owners={owners} gpOwner={gp.owner} /></div></Overlay>;
   if (addMeeting || editMeeting) return (
@@ -100,7 +121,7 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
       <div style={{ padding: "1.5rem" }}>
         {/* GP summary row */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-          <ScorePicker score={gp.score} size="lg" onChange={v => onUpdate({ ...gp, score: v })} />
+          <ScorePicker score={gp.rating?.code ?? gp.score} size="lg" onChange={v => onUpdate({ ...gp, score: v, rating: gp._rating ? { ...gp._rating, code: v } : undefined })} />
           <OwnerPicker owner={gp.owner} owners={owners} onChange={v => onUpdate({ ...gp, owner: v })} />
           <span style={{ color: "var(--tx3)", fontSize: "0.8125rem" }}>🏦 {funds.length} funds</span>
           <span style={{ color: "var(--tx3)", fontSize: "0.8125rem" }}>📅 {meetings.length} meetings</span>
@@ -108,7 +129,7 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
         </div>
         {gp.notes && <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "0.75rem 1rem", marginBottom: "1.25rem", color: "var(--tx2)", fontSize: "0.875rem", lineHeight: 1.6 }}>{gp.notes}</div>}
 
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>{TAB("funds",`Funds (${funds.length})`)}{TAB("meetings",`Meetings (${meetings.length})`)}{TAB("history", `History${gpChangeHistory.length > 0 ? ` (${gpChangeHistory.length})` : ""}`)}</div>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>{TAB("funds",`Funds (${funds.length})`)}{TAB("meetings",`Meetings (${meetings.length})`)}{isV2 && TAB("people",`People (${people.length})`)}{TAB("history", `History${gpChangeHistory.length > 0 ? ` (${gpChangeHistory.length})` : ""}`)}</div>
 
         {/* FUNDS TAB — grouped by series */}
         {tab === "funds" && (
@@ -118,7 +139,7 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
             </div>
             {funds.length === 0 && <div style={{ color: "var(--tx4)", textAlign: "center", padding: "2rem" }}>No funds added yet.</div>}
             {Object.entries(seriesGroups).map(([series, seriesFunds]) => {
-              const sorted = [...seriesFunds].sort((a,b) => (b.vintage||"").localeCompare(a.vintage||""));
+              const sorted = [...seriesFunds].sort((a,b) => String(b.vintage||"").localeCompare(String(a.vintage||"")));
               return (
                 <div key={series} style={{ marginBottom: "1rem" }}>
                   {series !== "__none__" && (
@@ -141,7 +162,7 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
                           <div style={{ flex: "1 1 0", minWidth: 0 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
                               <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.825rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
-                              {f.score && <ScoreBadge score={f.score} />}
+                              {(f.rating || f.score) && <ScoreBadge item={f._rating} score={f.rating?.code ?? f.score} />}
                               {f.status && <StatusPill status={f.status} />}
                               {f.invested && <InvestedBadge amount={f.investmentAmount} currency={f.investmentCurrency} />}
                             </div>
@@ -165,6 +186,37 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
           </div>
         )}
 
+        {/* PEOPLE TAB */}
+        {tab === "people" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+              <button onClick={() => setAddingPerson(true)} style={btnPrimary}>+ Add Person</button>
+            </div>
+            {people.length === 0 && !addingPerson && (
+              <div style={{ color: "var(--tx4)", textAlign: "center", padding: "2rem" }}>No contacts added yet.</div>
+            )}
+            {people.length > 0 && (
+              <div style={{ border: "1px solid var(--border)", borderRadius: "6px", overflow: "hidden", marginBottom: "1rem" }}>
+                {people.map((op, i) => (
+                  <PersonRow key={op.id ?? i} orgPerson={op} isLast={i === people.length - 1}
+                    onClick={() => setSelectedPerson(op)} />
+                ))}
+              </div>
+            )}
+            {/* Inline add-person form */}
+            {addingPerson && (
+              <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1.25rem", marginTop: "0.5rem" }}>
+                <div style={{ color: "var(--tx2)", fontWeight: 600, fontSize: "0.875rem", marginBottom: "1rem" }}>New Contact</div>
+                <AddPersonForm
+                  orgId={gp.id}
+                  onSaved={(op) => { setPeople(prev => [...prev, op]); setAddingPerson(false); }}
+                  onClose={() => setAddingPerson(false)}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* HISTORY TAB */}
         {tab === "history" && (
           <div>
@@ -173,16 +225,23 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
               <div style={{ color: "var(--tx5)", fontSize: "0.75rem" }}>No changes tracked yet — edits to Rating and Responsible will appear here.</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                {gpChangeHistory.map(c => (
-                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.775rem" }}>
-                    <span style={{ color: "var(--tx5)", flexShrink: 0, minWidth: "76px", fontSize: "0.72rem" }}>{c.changedAt ? fmt(c.changedAt.slice(0, 10)) : "—"}</span>
-                    <span style={{ color: "var(--tx4)", fontSize: "0.7rem", flexShrink: 0 }}>{GP_CHANGE_FIELD_LABELS[c.fieldName] || c.fieldName}</span>
-                    <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>·</span>
-                    {c.oldValue && <span style={{ color: "var(--tx4)", textDecoration: "line-through", fontSize: "0.72rem" }}>{c.oldValue}</span>}
-                    {c.oldValue && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>→</span>}
-                    <span style={{ color: "var(--tx1)", fontWeight: 500 }}>{c.newValue}</span>
-                  </div>
-                ))}
+                {gpChangeHistory.map(c => {
+                  // Support both old change_log shape and v2 audit_log shape
+                  const date    = c.changed_at ?? c.changedAt;
+                  const field   = c.field_name  ?? c.fieldName;
+                  const oldVal  = c.old_value   ?? c.oldValue;
+                  const newVal  = c.new_value   ?? c.newValue;
+                  return (
+                    <div key={c.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.775rem" }}>
+                      <span style={{ color: "var(--tx5)", flexShrink: 0, minWidth: "76px", fontSize: "0.72rem" }}>{date ? fmt(date.slice(0, 10)) : "—"}</span>
+                      <span style={{ color: "var(--tx4)", fontSize: "0.7rem", flexShrink: 0 }}>{GP_CHANGE_FIELD_LABELS[field] || field}</span>
+                      <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>·</span>
+                      {oldVal && <span style={{ color: "var(--tx4)", textDecoration: "line-through", fontSize: "0.72rem" }}>{oldVal}</span>}
+                      {oldVal && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>→</span>}
+                      <span style={{ color: "var(--tx1)", fontWeight: 500 }}>{newVal}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -228,5 +287,49 @@ export function GPDetailOverlay({ gp, onClose, onUpdate, onTagClick, onFundClick
         )}
       </div>
     </Overlay>
+  );
+}
+
+// ── AddPersonForm ──────────────────────────────────────────────────────────────
+// Inline form in GPDetail People tab — creates person + org_person link
+
+function AddPersonForm({ orgId, onSaved, onClose }) {
+  const [d, setD] = useState({ first_name: "", last_name: "", email: "", title: "", role: "", mobile: "", is_primary: false });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setD(p => ({ ...p, [k]: e.target.value }));
+  const inp = { background: "var(--input)", border: "1px solid var(--border)", borderRadius: "6px", color: "var(--tx1)", padding: "0.4rem 0.6rem", fontSize: "0.825rem", width: "100%", boxSizing: "border-box" };
+  const lbl = { color: "var(--tx4)", fontSize: "0.68rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.2rem" };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!d.first_name && !d.last_name) return;
+    setSaving(true);
+    try {
+      const result = await savePerson({ ...d, org_id: orgId });
+      onSaved(result);
+    } catch (err) {
+      console.error("Failed to add person:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.65rem", marginBottom: "0.65rem" }}>
+        <div><div style={lbl}>First Name</div><input style={inp} value={d.first_name} onChange={set("first_name")} placeholder="Jane" /></div>
+        <div><div style={lbl}>Last Name</div><input style={inp} value={d.last_name} onChange={set("last_name")} placeholder="Smith" /></div>
+        <div><div style={lbl}>Title</div><input style={inp} value={d.title} onChange={set("title")} placeholder="Partner" /></div>
+        <div><div style={lbl}>Role at Org</div><input style={inp} value={d.role} onChange={set("role")} placeholder="Lead Contact" /></div>
+        <div><div style={lbl}>Email</div><input style={inp} type="email" value={d.email} onChange={set("email")} placeholder="jane@firm.com" /></div>
+        <div><div style={lbl}>Mobile</div><input style={inp} value={d.mobile} onChange={set("mobile")} placeholder="+1 555 0100" /></div>
+      </div>
+      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.25rem" }}>
+        <button type="button" onClick={onClose} style={{ background: "none", border: "1px solid var(--border)", borderRadius: "6px", color: "var(--tx3)", padding: "0.35rem 0.9rem", cursor: "pointer", fontSize: "0.8rem" }}>Cancel</button>
+        <button type="submit" disabled={saving || (!d.first_name && !d.last_name)} style={{ background: "var(--accent)", border: "none", borderRadius: "6px", color: "#fff", padding: "0.35rem 0.9rem", cursor: "pointer", fontSize: "0.8rem", opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving…" : "Add Person"}
+        </button>
+      </div>
+    </form>
   );
 }

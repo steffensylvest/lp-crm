@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { loadData, saveData } from "./api.js";
-import { mkSeed } from './seed.js';
+import { loadLookups, loadTaxonomy, loadOrganizations, patchOrganizationField, patchFundField, loadMeetings, loadPendingProvenance, acceptProvenance, rejectProvenance } from "./api.js";
 import { DARK, LIGHT, btnGhost } from './theme.js';
 import { SCORE_CONFIG, PIPELINE_STAGES, STATUS_OPTIONS, SHORTCUTS } from './constants.js';
 import { uid, now } from './utils.js';
@@ -15,11 +14,68 @@ import { DenseTable } from './components/DenseTable.jsx';
 import { AllMeetingsView, AllFundsView, TagFilterView, GradeAView, FundraisingView } from './components/Views.jsx';
 import { DashboardView } from './components/DashboardView.jsx';
 import { GlobalSearch } from './components/GlobalSearch.jsx';
-import { SmartAddModal, DataMenu, StatCard } from './components/SmartAdd.jsx';
+import { SmartAddModal, StatCard } from './components/SmartAdd.jsx';
 import { GPForm, MeetingForm } from './components/Forms.jsx';
 import { SettingsContext } from './settingsContext.js';
 import { SettingsView } from './components/SettingsView.jsx';
 import { PlacementAgentDetailOverlay } from './components/PlacementAgentDetail.jsx';
+import { DataReviewView, ProvenanceBanner } from './components/DataReview.jsx';
+
+// ─── v2 → display-compatible normalizers ─────────────────────────────────────
+// These convert v2 API shapes to the format DenseTable/GPDetail expect.
+// Old-format data passes through unchanged (the fields it needs already exist).
+
+function normalizeV2Fund(f) {
+  return {
+    ...f,
+    _v2: true,
+    // Flatten lookup objects → primitives (legacy rendering compat)
+    score:  f.rating?.code  ?? f.score  ?? null,
+    status: f.status?.label ?? (typeof f.status === 'string' ? f.status : null),
+    // Preserved lookup objects for item-aware pickers/badges
+    _rating:        f.rating,
+    _status:        f.status,
+    _pipelineStage: f.pipeline_stage,
+    // camelCase aliases for v2 snake_case fields
+    raisedSize:       f.raised_size       ?? f.raisedSize       ?? null,
+    targetSize:       f.target_size       ?? f.targetSize       ?? null,
+    hardCap:          f.hard_cap          ?? f.hardCap          ?? null,
+    finalSize:        f.final_size        ?? f.finalSize        ?? null,
+    launchDate:       f.launch_date       ?? f.launchDate       ?? null,
+    firstCloseDate:   f.first_close_date  ?? f.firstCloseDate   ?? null,
+    nextCloseDate:    f.next_close_date   ?? f.nextCloseDate    ?? null,
+    finalCloseDate:   f.final_close_date  ?? f.finalCloseDate   ?? null,
+    raisedDate:       f.raised_date       ?? f.raisedDate       ?? null,
+    netIrr:           f.net_irr           ?? f.netIrr           ?? null,
+    netMoic:          f.net_moic          ?? f.netMoic          ?? null,
+    grossIrr:         f.gross_irr         ?? f.grossIrr         ?? null,
+    grossMoic:        f.gross_moic        ?? f.grossMoic        ?? null,
+    undrawnValue:     f.undrawn_value     ?? f.undrawnValue     ?? null,
+    perfDate:         f.perf_date         ?? f.perfDate         ?? null,
+    icDate:           f.ic_date           ?? f.icDate           ?? null,
+    expectedAmount:   f.expected_amount   ?? f.expectedAmount   ?? null,
+    investmentAmount: f.investment_amount ?? f.investmentAmount ?? null,
+    nextMarket:       f.next_market       ?? f.nextMarket       ?? null,
+    subStrategy:      f.sub_strategy      ?? f.subStrategy      ?? null,
+  };
+}
+
+function normalizeV2Org(org) {
+  return {
+    ...org,
+    // DenseTable / GPDetail compat fields
+    score:         org.rating?.code ?? null,
+    hq:            null,   // v2 stores geography as a taxonomy FK, not plain text
+    contact:       null,
+    contactEmail:  null,
+    notes:         org.notes_text ?? "",
+    meetings:      [],     // loaded lazily in OrgDetail
+    funds:         (org.funds || []).map(normalizeV2Fund),
+    // v2 extras preserved for OrgDetail
+    _rating:       org.rating,
+    _v2:           true,
+  };
+}
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -27,12 +83,23 @@ export default function App() {
   const theme = darkMode ? DARK : LIGHT;
   useEffect(() => { localStorage.setItem('lp-crm-theme', darkMode ? 'dark' : 'light'); }, [darkMode]);
 
-  const [data, setData] = useState(null);
-  const [isFallback, setIsFallback] = useState(false);
+  const [settings, setSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('lp-crm-settings') ?? '{}'); } catch { return {}; }
+  });
+  // Legacy data stub — gps/pipeline/placementAgents used only when !useV2; no API call
+  const [data, setData] = useState({ gps: [], pipeline: [], todos: [], placementAgents: [] });
   const [view, setView] = useState("home"); // home | allMeetings | allFunds | gradeA | fundraising | pipeline | tagFilter | dashboard
   const [prevView, setPrevView] = useState("home");
   const [tagFilter, setTagFilter] = useState(null); // { type, value }
-  const [loaded, setLoaded] = useState(false);
+
+  // v2 API state — loaded alongside legacy data
+  const [lookups, setLookups] = useState(null);       // { categories: [...], items_by_category: {...} }
+  const [taxonomy, setTaxonomy] = useState(null);     // { geography: [...], strategy: [...], sector: [...], target_market: [...] }
+  const [organizations, setOrganizations] = useState(null); // [org, ...]
+  const [provenance, setProvenance] = useState([]);   // FieldProvenance rows (all statuses)
+  // Derived: true when v2 organizations have loaded — drives dual-track UI
+  const useV2 = !!organizations;
+
   const [search, setSearch] = useState("");
   const [scoreF, setScoreF] = useState([]);    // multi-select arrays; empty = all
   const [stratF, setStratF] = useState([]);
@@ -60,81 +127,38 @@ export default function App() {
   const zOf = (name) => modalZs[name] ?? 1000;
 
   const searchRef = useRef(null);
-  const fileInputRef = useRef(null);
   // Tracks whether a fund overlay inline card is currently being edited
   // so Esc can cancel just that edit without closing anything else
   const fundInlineEditingRef = useRef(false);
 
-  const exportData = useCallback(() => {
-    if (!data) return;
-    const exportPayload = {
-      meta: { version: "1.0", exportedAt: now(), exportedBy: "LP CRM v1" },
-      gps: data.gps.map(g => ({
-        ...g,
-        updatedAt: now(),
-        funds: (g.funds || []).map(f => ({ ...f, gpId: g.id })),
-        meetings: (g.meetings || []).map(m => ({ ...m, gpId: g.id })),
-      })),
-      pipeline: data.pipeline,
-      settings: data.settings,
-    };
-    // Use data URI — works in sandboxed iframes where createObjectURL may not
-    const json = JSON.stringify(exportPayload, null, 2);
-    const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(json);
-    const a = document.createElement("a");
-    const date = new Date().toISOString().slice(0, 10);
-    a.href = dataUri;
-    a.download = `lp-crm-${date}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [data]);
+  // Persist settings to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('lp-crm-settings', JSON.stringify(settings));
+  }, [settings]);
 
-  const importData = useCallback((e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target.result);
-        if (!parsed.gps || !Array.isArray(parsed.gps)) throw new Error("Missing gps array");
-        if (!parsed.pipeline || !Array.isArray(parsed.pipeline)) throw new Error("Missing pipeline array");
-        const cleaned = {
-          gps: parsed.gps.map(g => ({
-            ...g,
-            funds: (g.funds || []).map(({ gpId: _g, ...f }) => f),
-            meetings: (g.meetings || []).map(({ gpId: _g, ...m }) => m),
-          })),
-          pipeline: parsed.pipeline,
-        };
-        if (confirm(`Import ${cleaned.gps.length} GP(s) and ${cleaned.pipeline.length} pipeline item(s)? This will replace your current data.`)) {
-          setData(cleaned);
-        }
-      } catch (err) {
-        alert(`Import failed: ${err.message}\n\nMake sure you're using a valid LP CRM export file.`);
-      }
-      e.target.value = "";
-    };
-    reader.readAsText(file);
+  useEffect(() => {
+    // Load v2 data — failures are non-fatal (UI falls back to hardcoded constants)
+    loadLookups().then(cats => {
+      // Index items by slug: "lc_pipeline_stage" → "pipeline-stage"
+      const byCategory = {};
+      cats.forEach(cat => {
+        const key = cat.id.replace(/^lc_/, '').replace(/_/g, '-');
+        byCategory[key] = cat.items;
+      });
+      setLookups({ categories: cats, items_by_category: byCategory });
+    }).catch(() => {});
+    Promise.all([
+      loadTaxonomy('geography'),
+      loadTaxonomy('strategy'),
+      loadTaxonomy('sector'),
+      loadTaxonomy('target_market'),
+    ]).then(([geography, strategy, sector, target_market]) =>
+      setTaxonomy({ geography, strategy, sector, target_market })
+    ).catch(() => {});
+    loadOrganizations().then(setOrganizations).catch(() => {});
+    loadPendingProvenance().then(rows => setProvenance(rows ?? [])).catch(() => {});
   }, []);
 
-  useEffect(() => { loadData().then(d => { setIsFallback(!!d?.__isFallback); setData(d || mkSeed()); setLoaded(true); }); }, []);
-
-  // ── Auto-save with 800ms debounce — fast enough to feel instant, won't ──
-  // ── fire on every keystroke while typing in a form field              ──
-  const saveTimer = useRef(null);
-  const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving" | "unsaved"
-  useEffect(() => {
-    if (!loaded || !data) return;
-    setSaveStatus("unsaved");
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      setSaveStatus("saving");
-      await saveData(data);
-      setSaveStatus("saved");
-    }, 800);
-    return () => clearTimeout(saveTimer.current);
-  }, [data, loaded]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
@@ -226,38 +250,46 @@ export default function App() {
     setTodos(ts => ts.filter(t => t.id !== id));
   }, [setTodos]);
 
-  const updateGP = useCallback((updated) => {
-    setGPs(gps => gps.map(g => g.id === updated.id ? updated : g));
-    if (gpOverlay?.id === updated.id) setGpOverlay(updated);
-    if (fundOverlay?.gp?.id === updated.id) setFundOverlay(fov => fov ? { ...fov, gp: updated, fund: (updated.funds||[]).find(f=>f.id===fov.fund.id) || fov.fund } : null);
-  }, [gpOverlay, fundOverlay]);
-
   const saveLoggedMeeting = useCallback((m) => {
     if (!logMeeting?.gp) return;
-    // Get fresh GP from store to avoid stale reference
-    const freshGP = data?.gps?.find(g => g.id === logMeeting.gp.id) || logMeeting.gp;
+    const freshGP = data.gps.find(g => g.id === logMeeting.gp.id) || logMeeting.gp;
     const newMeeting = { ...m, id: uid() };
-    updateGP({ ...freshGP, meetings: [newMeeting, ...(freshGP.meetings || [])] });
+    if (!useV2) {
+      setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: [newMeeting, ...(freshGP.meetings || [])] } : g));
+    }
     setLogMeeting(null);
-  }, [logMeeting, updateGP, data]);
+  }, [logMeeting, data, useV2]);
 
   const saveEditedMeeting = useCallback((m) => {
     if (!editMeeting?.gp) return;
-    const freshGP = data?.gps?.find(g => g.id === editMeeting.gp.id) || editMeeting.gp;
-    updateGP({ ...freshGP, meetings: (freshGP.meetings || []).map(em => em.id === m.id ? m : em) });
+    const freshGP = data.gps.find(g => g.id === editMeeting.gp.id) || editMeeting.gp;
+    if (!useV2) {
+      setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: (freshGP.meetings || []).map(em => em.id === m.id ? m : em) } : g));
+    }
     setEditMeeting(null);
-  }, [editMeeting, updateGP, data]);
+  }, [editMeeting, data, useV2]);
 
-  if (!data) return <div style={{ ...theme, background: "var(--bg)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--tx3)", fontFamily: "system-ui" }}>Loading…</div>;
+  const { gps, pipeline: legacyPipeline, todos = [], placementAgents = [] } = data;
 
-  const { gps, pipeline, todos = [], settings = {}, placementAgents = [] } = data;
-  const allFunds = gps.flatMap(g => g.funds || []);
-  const allMeetings = gps.flatMap(g => g.meetings || []);
-  const fundraising = allFunds.filter(f => f.status === "Fundraising").length;
-  const aGPsCount = gps.filter(g => g.score === "A").length;
-  const allStrats = [...new Set(allFunds.map(f => f.strategy))].sort();
-  const allOwners = [...new Set([
-    ...gps.map(g => g.owner).filter(Boolean),
+  // ── v2 data takes priority over old gps when available ─────────────────────
+  // Normalized orgs: v2 when loaded, old gps as fallback
+  const displayOrgs = useV2
+    ? organizations.filter(o => o.org_type === 'gp').map(normalizeV2Org)
+    : gps;
+  // Pipeline derived from v2 fund fields when available, otherwise legacy table
+  const pipeline = useV2
+    ? organizations.flatMap(o => (o.funds || [])
+        .filter(f => f.pipeline_stage_id)
+        .map(f => ({ id: f.id, fundId: f.id, stage: f.pipeline_stage?.code ?? String(f.pipeline_stage_id) })))
+    : legacyPipeline;
+
+  const allFunds     = displayOrgs.flatMap(g => g.funds || []);
+  const allMeetings  = displayOrgs.flatMap(g => g.meetings || []);
+  const fundraising  = allFunds.filter(f => f.status === "Fundraising").length;
+  const aGPsCount    = displayOrgs.filter(g => g.score === "A").length;
+  const allStrats    = [...new Set(allFunds.map(f => f.strategy))].sort();
+  const allOwners    = [...new Set([
+    ...displayOrgs.map(g => g.owner).filter(Boolean),
     ...allFunds.map(f => f.owner).filter(Boolean),
     ...(settings.people ?? []),
   ])].sort();
@@ -267,6 +299,57 @@ export default function App() {
   const handleMeetingClick = (meeting, gp) => { setMeetingOverlay({ meeting, gp }); openModal('meeting'); };
   const handleGpClick      = (gp) => { setGpOverlay(gp); openModal('gp'); };
   const goHome = () => { setView("home"); };
+
+  // ── v2 update callbacks ────────────────────────────────────────────────────
+  // For v2 mode, optimistically update organizations state and call API.
+  // For legacy mode, fall through to old setGPs/setPipeline.
+  const updateOrg = useCallback((updated) => {
+    if (useV2) {
+      setOrganizations(orgs => orgs.map(o => o.id === updated.id ? { ...o, ...updated } : o));
+    } else {
+      setGPs(gps => gps.map(g => g.id === updated.id ? updated : g));
+    }
+    if (gpOverlay?.id === updated.id) setGpOverlay(updated);
+    if (fundOverlay?.gp?.id === updated.id) setFundOverlay(fov => fov ? { ...fov, gp: updated } : null);
+  }, [useV2, gpOverlay, fundOverlay]);
+
+  // ── Provenance helpers ────────────────────────────────────────────────────
+  const provenanceFor = (entityType, entityId) =>
+    provenance.filter(r => r.entity_type === entityType && String(r.entity_id) === String(entityId));
+
+  const handleAcceptProvenance = useCallback(async (id) => {
+    await acceptProvenance(id, "Me").catch(() => {});
+    setProvenance(prev => prev.map(r => r.id === id ? { ...r, status: "accepted" } : r));
+  }, []);
+
+  const handleRejectProvenance = useCallback(async (id) => {
+    await rejectProvenance(id, "Me").catch(() => {});
+    setProvenance(prev => prev.filter(r => r.id !== id));
+  }, []);
+
+  const handlePipelineStage = useCallback((fundId, stage, gp) => {
+    if (useV2) {
+      // stage is a code ("watching"); look up the full item ID for the DB FK
+      const stageItems = lookups?.items_by_category?.['pipeline-stage'] ?? [];
+      const stageItem = stage ? stageItems.find(i => i.code === stage) : null;
+      const stageId = stageItem?.id ?? null;
+      patchFundField(fundId, 'pipeline_stage_id', stageId, null, null).catch(console.error);
+      setOrganizations(orgs => orgs.map(o => o.id === gp?.id
+        ? { ...o, funds: (o.funds || []).map(f => f.id === fundId
+            ? { ...f, pipeline_stage_id: stageId, pipeline_stage: stageItem ?? null }
+            : f) }
+        : o));
+    } else {
+      setData(d => {
+        const pl = d.pipeline || [];
+        const existing = pl.find(p => p.fundId === fundId);
+        const newPl = !stage ? pl.filter(p => p.fundId !== fundId)
+          : existing ? pl.map(p => p.fundId === fundId ? { ...p, stage } : p)
+          : [...pl, { id: uid(), fundId, gpName: gp?.name || "", stage, addedAt: now() }];
+        return { ...d, pipeline: newPl };
+      });
+    }
+  }, [useV2, lookups]);
 
   // ─── Universal search across all entities ─────────────────────────────────
   const universalFilter = (gp) => {
@@ -292,8 +375,8 @@ export default function App() {
     return inGP || inFunds || inMeetings;
   };
 
-  // Filtered GP list for home
-  const filtered = gps.filter(g => {
+  // Filtered org list for home
+  const filtered = displayOrgs.filter(g => {
     return universalFilter(g) &&
       (scoreF.length === 0 || scoreF.includes(g.score)) &&
       (stratF.length === 0 || (g.funds||[]).some(f => stratF.includes(f.strategy))) &&
@@ -324,7 +407,7 @@ export default function App() {
   if (sc?.border) customVars['--sector-bd'] = sc.border;
 
   const wrap = (children) => (
-    <SettingsContext.Provider value={{ settings, mode, setSettings: (s) => setData(d => ({ ...d, settings: s })) }}>
+    <SettingsContext.Provider value={{ settings, mode, setSettings }}>
     <div style={{ ...theme, ...customVars, background: "var(--bg)", height: "100vh", boxSizing: "border-box", overflowY: "auto", display: "flex", flexDirection: "column", padding: "2rem 2rem 1.25rem", fontFamily: "'DM Sans','Segoe UI',system-ui,sans-serif", color: "var(--tx1)" }}>
       <div style={{ maxWidth: "1400px", margin: "0 auto", flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
         {/* Top bar */}
@@ -347,9 +430,6 @@ export default function App() {
             ))}
           </div>
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <span style={{ fontSize: "0.7rem", color: saveStatus === "saved" ? "var(--tx5)" : saveStatus === "saving" ? "var(--tx4)" : "var(--tx3)", transition: "color 0.4s", minWidth: "55px", textAlign: "right" }}>
-              {saveStatus === "saving" ? "saving…" : saveStatus === "unsaved" ? "unsaved" : "✓ saved"}
-            </span>
             <span style={{ color: "var(--tx5)", fontSize: "0.7rem", display: "flex", gap: "0.3rem", flexWrap: "wrap", alignItems: "center" }}>
               {["/", "*", "esc", ...SHORTCUTS.map(s => s.key)].map(k => (
                 <kbd key={k} title={k === "/" ? "Global search" : k === "*" ? "Filter (home)" : k === "esc" ? "Close / back" : (SHORTCUTS.find(s=>s.key===k)?.label)} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.1rem 0.35rem", fontFamily: "monospace", color: "var(--tx5)", cursor: "default" }}>{k}</kbd>
@@ -361,22 +441,22 @@ export default function App() {
               Pipeline Board
               <kbd style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontFamily: "monospace", fontSize: "0.65rem", color: "var(--tx5)" }}>{SHORTCUTS.find(s=>s.view==="pipeline")?.key}</kbd>
             </button>
-            <DataMenu exportData={exportData} fileInputRef={fileInputRef} importData={importData} onLoadSeed={() => setData(mkSeed())} />
-            <input ref={fileInputRef} type="file" accept=".json" onChange={importData} style={{ display: "none" }} />
+            {useV2 && (() => {
+              const pendingCount = provenance.filter(r => r.status === "pending").length;
+              return (
+                <button onClick={() => setView("dataReview")} style={{ ...btnGhost, fontSize: "0.8125rem", display: "flex", alignItems: "center", gap: "0.4rem", position: "relative" }}>
+                  Data Review
+                  {pendingCount > 0 && (
+                    <span style={{ background: "#f59e0b", color: "#fff", borderRadius: "10px", padding: "0 0.35rem", fontSize: "0.65rem", fontWeight: 700, minWidth: "16px", textAlign: "center" }}>
+                      {pendingCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
             <button onClick={() => { setShowAddNew(true); openModal('addNew'); }} style={{ background: "linear-gradient(135deg,#1d4ed8,#7c3aed)", border: "none", borderRadius: "7px", color: "#fff", padding: "0.55rem 1.1rem", fontSize: "0.875rem", fontWeight: 700, cursor: "pointer" }}>+ Add New</button>
           </div>
         </div>
-        {isFallback && (
-          <div style={{ background: "#431407", border: "1px solid #ea580c", borderRadius: "10px", padding: "0.9rem 1.25rem", marginBottom: "1.5rem", display: "flex", alignItems: "center", gap: "1rem" }}>
-            <span style={{ fontSize: "1.3rem" }}>⚠</span>
-            <div>
-              <div style={{ color: "#fb923c", fontWeight: 700, fontSize: "0.9rem" }}>Backend not reachable — showing dummy data only</div>
-              <div style={{ color: "#c2410c", fontSize: "0.8rem", marginTop: "0.2rem" }}>
-                Nothing you see here is real. Start the server with <code style={{ background: "#7c2d12", padding: "0.1rem 0.4rem", borderRadius: "3px", fontFamily: "monospace" }}>npm run dev</code> then refresh.
-              </div>
-            </div>
-          </div>
-        )}
         {children}
       </div>
     </div>
@@ -403,11 +483,15 @@ export default function App() {
       {gpOverlay && (
         <GPDetailOverlay gp={gpOverlay} owners={allOwners} zIndex={zOf('gp')}
           onClose={() => { setGpOverlay(null); closeModal('gp'); setFundOverlay(null); closeModal('fund'); }}
-          onUpdate={updateGP} onTagClick={handleTagClick}
+          onUpdate={updateOrg} onTagClick={handleTagClick}
           onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); }}
           onMeetingClick={(m, gp) => { setMeetingOverlay({ meeting: m, gp }); openModal('meeting'); }}
           onLogMeeting={(gp, fundId) => { setLogMeeting({ gp, fundId }); openModal('logMeeting'); }}
-          onDeleteGP={(id) => { setGpOverlay(null); closeModal('gp'); setFundOverlay(null); closeModal('fund'); setGPs(g => g.filter(x => x.id !== id)); }}
+          onDeleteGP={(id) => {
+            setGpOverlay(null); closeModal('gp'); setFundOverlay(null); closeModal('fund');
+            if (useV2) setOrganizations(orgs => orgs.filter(o => o.id !== id));
+            else setGPs(g => g.filter(x => x.id !== id));
+          }}
         />
       )}
       {fundOverlay && (
@@ -415,14 +499,10 @@ export default function App() {
           fund={fundOverlay.fund} gp={fundOverlay.gp} owners={allOwners}
           meetings={(fundOverlay.gp?.meetings || [])}
           pipeline={pipeline}
-          onPipelineStage={(fundId, stage) => {
-            setPipeline(pl => {
-              const existing = pl.find(p => p.fundId === fundId);
-              if (!stage) return pl.filter(p => p.fundId !== fundId);
-              if (existing) return pl.map(p => p.fundId === fundId ? { ...p, stage } : p);
-              return [...pl, { id: uid(), fundId, gpName: fundOverlay.gp?.name || "", stage, addedAt: now() }];
-            });
-          }}
+          provenanceRows={provenanceFor("fund", fundOverlay.fund?.id)}
+          onAcceptProvenance={handleAcceptProvenance}
+          onRejectProvenance={handleRejectProvenance}
+          onPipelineStage={(fundId, stage) => handlePipelineStage(fundId, stage, fundOverlay.gp)}
           onClose={() => { setFundOverlay(null); closeModal('fund'); fundInlineEditingRef.current = false; }}
           zIndex={zOf('fund')}
           onEditingChange={(id) => { fundInlineEditingRef.current = !!id; }}
@@ -437,7 +517,7 @@ export default function App() {
           onSaveFund={(updated) => {
             const gp = fundOverlay.gp;
             const updatedGP = { ...gp, funds: (gp.funds||[]).map(f => f.id === updated.id ? updated : f) };
-            updateGP(updatedGP);
+            updateOrg(updatedGP);
             setFundOverlay({ ...fundOverlay, fund: updated, gp: updatedGP });
           }}
           onAddMeeting={(fid) => { setLogMeeting({ gp: fundOverlay.gp, fundId: fid }); openModal('logMeeting'); }}
@@ -517,18 +597,17 @@ export default function App() {
       )}
       {showAddNew && (
         <SmartAddModal
-          gps={gps}
+          gps={displayOrgs}
           onClose={() => { setShowAddNew(false); closeModal('addNew'); }}
           onAddGP={(d) => { setGPs(gs => [{ ...d, id: uid(), funds: [], meetings: [] }, ...gs]); }}
           onAddFund={(gpId, d) => {
-            const gp = gps.find(g => g.id === gpId);
-            if (gp) updateGP({ ...gp, funds: [...(gp.funds||[]), { ...d, id: uid() }] });
+            const gp = displayOrgs.find(g => g.id === gpId);
+            if (gp) updateOrg({ ...gp, funds: [...(gp.funds||[]), { ...d, id: uid() }] });
           }}
           onLogMeeting={(gp, fundId, m) => {
             if (m) {
-              // Direct save from inline meeting form in SmartAddModal
-              const freshGP = gps.find(g => g.id === gp.id) || gp;
-              updateGP({ ...freshGP, meetings: [{ ...m, id: uid() }, ...(freshGP.meetings||[])] });
+              const freshGP = displayOrgs.find(g => g.id === gp.id) || gp;
+              updateOrg({ ...freshGP, meetings: [{ ...m, id: uid() }, ...(freshGP.meetings||[])] });
             } else {
               setLogMeeting({ gp, fundId }); openModal('logMeeting');
             }
@@ -550,18 +629,40 @@ export default function App() {
   // Sub-views
   if (view === "settings") return wrap(<><SettingsView onBack={goHome} />{renderOverlays()}</>);
   if (view === "dashboard") return wrap(<><DashboardView gps={gps} pipeline={pipeline} todos={todos} owners={allOwners} onBack={goHome} onAddTodo={handleAddTodo} onToggleTodo={handleToggleTodo} onDeleteTodo={handleDeleteTodo} onMeetingClick={handleMeetingClick} onFundClick={handleFundClick} />{renderOverlays()}</>);
-  if (view === "pipeline") return wrap(<><PipelineBoard pipeline={pipeline} gps={gps} onUpdate={setPipeline} onFundClick={handleFundClick} onBack={goHome} />{renderOverlays()}</>);
-  if (view === "allMeetings") return wrap(<><AllMeetingsView gps={gps} onBack={goHome} onMeetingClick={handleMeetingClick} />{renderOverlays()}</>);
-  if (view === "allFunds") return wrap(<><AllFundsView gps={gps} onBack={goHome} onFundClick={handleFundClick} onTagClick={handleTagClick} />{renderOverlays()}</>);
-  if (view === "tagFilter") return wrap(<><TagFilterView type={tagFilter?.type} value={tagFilter?.value} gps={gps} onBack={() => setView(prevView || "home")} onFundClick={handleFundClick} />{renderOverlays()}</>);
-  if (view === "gradeA") return wrap(<><GradeAView gps={gps} onBack={goHome} onGpClick={handleGpClick} />{renderOverlays()}</>);
-  if (view === "fundraising") return wrap(<><FundraisingView gps={gps} onBack={goHome} onFundClick={handleFundClick} />{renderOverlays()}</>);
+  if (view === "dataReview") return wrap(<>
+    <DataReviewView
+      onBack={goHome}
+      displayOrgs={displayOrgs}
+      onEntityClick={(entityType, entity) => {
+        if (entityType === "fund") {
+          const gp = displayOrgs.find(o => (o.funds||[]).some(f => f.id === entity.id));
+          if (gp) handleFundClick(entity, gp);
+        } else {
+          handleGpClick(entity);
+        }
+        setView("home");
+      }}
+    />
+    {renderOverlays()}
+  </>);
+  if (view === "pipeline") return wrap(<><PipelineBoard
+    pipeline={pipeline} gps={displayOrgs}
+    onUpdate={useV2 ? null : setPipeline}
+    onMoveStage={useV2 ? (fundId, stage) => handlePipelineStage(fundId, stage, displayOrgs.find(o => (o.funds||[]).some(f => f.id === fundId))) : null}
+    onFundClick={handleFundClick} onBack={goHome}
+    stageItems={lookups?.items_by_category?.['pipeline-stage']}
+  />{renderOverlays()}</>);
+  if (view === "allMeetings") return wrap(<><AllMeetingsView gps={displayOrgs} onBack={goHome} onMeetingClick={handleMeetingClick} />{renderOverlays()}</>);
+  if (view === "allFunds") return wrap(<><AllFundsView gps={displayOrgs} onBack={goHome} onFundClick={handleFundClick} onTagClick={handleTagClick} />{renderOverlays()}</>);
+  if (view === "tagFilter") return wrap(<><TagFilterView type={tagFilter?.type} value={tagFilter?.value} gps={displayOrgs} onBack={() => setView(prevView || "home")} onFundClick={handleFundClick} />{renderOverlays()}</>);
+  if (view === "gradeA") return wrap(<><GradeAView gps={displayOrgs} onBack={goHome} onGpClick={handleGpClick} />{renderOverlays()}</>);
+  if (view === "fundraising") return wrap(<><FundraisingView gps={displayOrgs} onBack={goHome} onFundClick={handleFundClick} />{renderOverlays()}</>);
 
   // HOME
   return wrap(
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "0.75rem", marginBottom: "1rem" }}>
-        <StatCard label="Total GPs" value={gps.length} onClick={goHome} sub="All GPs" shortcut={SHORTCUTS.find(s=>s.view==="home")?.key} />
+        <StatCard label="Total GPs" value={displayOrgs.length} onClick={goHome} sub="All GPs" shortcut={SHORTCUTS.find(s=>s.view==="home")?.key} />
         <StatCard label="Grade A GPs" value={aGPsCount} accent="#22c55e" sub="Likely to invest" onClick={() => setView("gradeA")} shortcut={SHORTCUTS.find(s=>s.view==="gradeA")?.key} />
         <StatCard label="Funds Tracked" value={allFunds.length} accent="#a78bfa" sub="All strategies" onClick={() => setView("allFunds")} shortcut={SHORTCUTS.find(s=>s.view==="allFunds")?.key} />
         <StatCard label="Meetings Logged" value={allMeetings.length} accent="#fbbf24" sub="All GPs & funds" onClick={() => setView("allMeetings")} shortcut={SHORTCUTS.find(s=>s.view==="allMeetings")?.key} />
@@ -638,7 +739,7 @@ export default function App() {
 
         {/* Result count */}
         <span style={{ color: "var(--tx5)", fontSize: "0.72rem", whiteSpace: "nowrap", flexShrink: 0 }}>
-          {filtered.length}/{gps.length}
+          {filtered.length}/{displayOrgs.length}
         </span>
       </div>
 
@@ -646,22 +747,15 @@ export default function App() {
       <div style={{ flex: 1, minHeight: 0 }}>
       <DenseTable
         filtered={filtered}
-        allGps={gps}
+        allGps={displayOrgs}
         pipeline={pipeline}
-        onGpClick={(gp) => setGpOverlay(gp)}
+        onGpClick={(gp) => { setGpOverlay(gp); openModal('gp'); }}
         onFundClick={(fund, gp) => handleFundClick(fund, gp)}
         onMeetingClick={handleMeetingClick}
         autoExpand={!!(search || scoreF.length || stratF.length || statusF.length)}
         owners={allOwners}
-        onUpdateGP={updateGP}
-        onUpdatePipeline={(fundId, stage, gp) => {
-          setPipeline(pl => {
-            const existing = pl.find(p => p.fundId === fundId);
-            if (!stage) return pl.filter(p => p.fundId !== fundId);
-            if (existing) return pl.map(p => p.fundId === fundId ? { ...p, stage } : p);
-            return [...pl, { id: uid(), fundId, gpName: gp?.name || "", stage, addedAt: now() }];
-          });
-        }}
+        onUpdateGP={updateOrg}
+        onUpdatePipeline={handlePipelineStage}
         placementAgents={filteredPAs}
         onPaClick={(pa) => setPaOverlay(pa)}
       />

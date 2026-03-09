@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS, PIPELINE_STAGES } from '../constants.js';
 import { IS, ISFilled, TA, TAFilled, btnBase, btnPrimary, btnGhost, btnDanger } from '../theme.js';
 import { fmt, fmtM } from '../utils.js';
-import { loadFundPerformanceHistory, loadFundRaisedHistory, loadFundChangeHistory } from '../api.js';
+import { loadAuditLog } from '../api.js';
 import { ScoreBadge, StatusPill, SectorChip } from './Badges.jsx';
 import { ScorePicker, StatusPicker, OwnerPicker, StagePicker, StrategyPicker, SubStrategyPicker, EditingContext, InlineMetric } from './Pickers.jsx';
 import { Overlay, OverlayHeader } from './Overlay.jsx';
 import { FundForm } from './Forms.jsx';
 import { NoteField } from './Forms.jsx';
+import { ProvenanceBanner } from './DataReview.jsx';
 
 // Human-readable labels for change-log field names
 const CHANGE_FIELD_LABELS = { score: "Rating", status: "Status", stage: "Pipeline Stage", owner: "Responsible" };
@@ -369,7 +370,7 @@ function PATagPicker({ attachedPA, placementAgents, onChange, onOpen }) {
   );
 }
 
-export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage, placementAgents = [], onPlacementAgentClick }) {
+export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage, placementAgents = [], onPlacementAgentClick, provenanceRows = [], onAcceptProvenance, onRejectProvenance }) {
   const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [fundraisingExpanded, setFundraisingExpanded] = useState(null); // null = auto
@@ -397,13 +398,9 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
 
   const fetchHistory = () => {
     let cancelled = false;
-    Promise.all([
-      loadFundPerformanceHistory(fund.id),
-      loadFundRaisedHistory(fund.id),
-      loadFundChangeHistory(fund.id),
-    ]).then(([perf, raised, changes]) => {
-      if (!cancelled) { setPerfHistory(perf); setRaisedHistory(raised); setChangeHistory(changes); }
-    });
+    loadAuditLog('fund', fund.id)
+      .then(entries => { if (!cancelled) setChangeHistory(entries ?? []); })
+      .catch(() => {});
     return () => { cancelled = true; };
   };
 
@@ -415,9 +412,10 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
     const timer = setTimeout(fetchHistory, 1500);
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // After normalizeV2Fund, all fields are camelCase — these deps cover both v2 and legacy
   }, [fund.score, fund.status, fund.raisedSize,
       fund.netIrr, fund.netMoic, fund.grossIrr, fund.grossMoic,
-      fund.dpi, fund.tvpi, fund.rvpi, fund.nav, fund.undrawnValue, fund.perfDate]);
+      fund.dpi, fund.tvpi, fund.rvpi, fund.nav, fund.undrawnValue, fund.perfDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fundMeetings = (meetings || []).filter(m => m.fundId === fund.id).sort((a, b) => new Date(b.date) - new Date(a.date));
   const meetingsWithNotes = fundMeetings.filter(m => m.notes?.trim());
@@ -432,7 +430,8 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
   useEffect(() => { setFundraisingExpanded(null); }, [fund.status]);
 
   const patch = (fields) => onSaveFund({ ...fund, ...fields });
-  const currentStage = (pipeline).find(p => p.fundId === fund.id)?.stage || null;
+  // v2 funds carry _pipelineStage lookup_item; old funds use the pipeline array
+  const currentStage = fund._pipelineStage?.code ?? (pipeline).find(p => p.fundId === fund.id)?.stage ?? null;
 
   // Notify parent when an inline card is being edited, so Esc can cancel it
   const setEditingIdWithNotify = (id) => {
@@ -499,6 +498,12 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
           </div>
         )}
       />
+      {/* Provenance banner — shown when Preqin suggestions pending for this fund */}
+      {provenanceRows.some(r => r.status === "pending") && (
+        <div style={{ padding: "0.75rem 1.5rem 0" }}>
+          <ProvenanceBanner rows={provenanceRows} />
+        </div>
+      )}
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 1.5rem" }}>
         {[["overview", "Overview"], ["performance", "Performance"], ["history", `History${totalHistory > 0 ? ` (${totalHistory})` : ""}`], ["insights", `Insights${meetingsWithNotes.length ? ` (${meetingsWithNotes.length})` : ""}`]].map(([t, label]) => (
@@ -597,16 +602,23 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
                 <div style={{ color: "var(--tx5)", fontSize: "0.75rem" }}>No changes tracked yet — edits to Rating, Status, and Pipeline Stage will appear here.</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                  {changeHistory.map(c => (
+                  {changeHistory.map(c => {
+                    // Support both legacy camelCase and v2 snake_case audit log field names
+                    const date   = c.changedAt  ?? c.changed_at;
+                    const field  = c.fieldName  ?? c.field_name;
+                    const oldVal = c.oldValue   ?? c.old_value;
+                    const newVal = c.newValue   ?? c.new_value;
+                    return (
                     <div key={c.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.775rem" }}>
-                      <span style={{ color: "var(--tx5)", flexShrink: 0, minWidth: "76px", fontSize: "0.72rem" }}>{c.changedAt ? fmt(c.changedAt.slice(0, 10)) : "—"}</span>
-                      <span style={{ color: "var(--tx4)", fontSize: "0.7rem", flexShrink: 0 }}>{CHANGE_FIELD_LABELS[c.fieldName] || c.fieldName}</span>
+                      <span style={{ color: "var(--tx5)", flexShrink: 0, minWidth: "76px", fontSize: "0.72rem" }}>{date ? fmt(date.slice(0, 10)) : "—"}</span>
+                      <span style={{ color: "var(--tx4)", fontSize: "0.7rem", flexShrink: 0 }}>{CHANGE_FIELD_LABELS[field] || field}</span>
                       <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>·</span>
-                      {c.oldValue && <span style={{ color: "var(--tx4)", textDecoration: "line-through", fontSize: "0.72rem" }}>{c.oldValue}</span>}
-                      {c.oldValue && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>→</span>}
-                      <span style={{ color: "var(--tx1)", fontWeight: 500 }}>{c.newValue}</span>
+                      {oldVal && <span style={{ color: "var(--tx4)", textDecoration: "line-through", fontSize: "0.72rem" }}>{oldVal}</span>}
+                      {oldVal && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>→</span>}
+                      <span style={{ color: "var(--tx1)", fontWeight: 500 }}>{newVal}</span>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

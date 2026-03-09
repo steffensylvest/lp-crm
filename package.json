@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n server,client -c cyan,magenta \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "cd python-server && python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 3001",
+    "dev:server": "cd python-server && python -m uvicorn main:app --reload --host 0.0.0.0 --port 3001",
     "dev:client": "cd client && npm run dev",
-    "setup:python": "cd python-server && pip3 install -r requirements.txt",
-    "install:all": "npm install && cd client && npm install"
+    "setup:python": "python -m pip install -r python-server/requirements.txt",
+    "install:all": "npm install && npm --prefix client install"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

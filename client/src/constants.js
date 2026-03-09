@@ -1,3 +1,7 @@
+// Fallback defaults — these values are also stored in the DB (lookup/taxonomy tables)
+// and provided by the /api/v2/lookups and /api/v2/taxonomy endpoints at runtime.
+// These constants are used as UI fallbacks when the API is loading or unreachable.
+
 export const SCORE_CONFIG = {
   A: { color: "#4ade80", bg: "#052e16", desc: "Likely to invest" },
   B: { color: "#86efac", bg: "#0f3320", desc: "Strong interest" },

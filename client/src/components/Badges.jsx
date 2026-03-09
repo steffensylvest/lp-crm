@@ -2,8 +2,15 @@ import React from "react";
 import { STATUS_PILL_KEY, STATUS_OPTIONS } from '../constants.js';
 import { useSettings } from '../settingsContext.js';
 
-export function ScoreBadge({ score, size = "sm" }) {
-  return <span style={{ background: `var(--sb-${score}-bg)`, color: `var(--sb-${score}-c)`, border: `1px solid var(--sb-${score}-bd)`, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{score}</span>;
+// item: optional lookup_item object { code, label, color, bg_color } from v2 API
+// Falls back to CSS-var based styling when item is not provided (legacy mode)
+export function ScoreBadge({ score, item, size = "sm" }) {
+  const code  = item?.code  ?? score;
+  const label = item?.label ?? score;
+  const bg    = item?.bg_color ? item.bg_color : `var(--sb-${code}-bg)`;
+  const color = item?.color    ? item.color    : `var(--sb-${code}-c)`;
+  const border = item?.color   ? `1px solid ${item.color}40` : `1px solid var(--sb-${code}-bd)`;
+  return <span style={{ background: bg, color, border, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{label}</span>;
 }
 // Exported so StatusPicker and other components can reuse the same logic
 export function getStatusStyle(status, settings, mode) {
@@ -16,10 +23,19 @@ export function getStatusStyle(status, settings, mode) {
     color: custom?.color ?? `var(--pill-c-${Math.min(k, 12)})`,
   };
 }
-export function StatusPill({ status }) {
+// item: optional lookup_item object { code, label, color, bg_color } from v2 API
+// Falls back to CSS-var based styling when item is not provided (legacy mode)
+export function StatusPill({ status, item }) {
   const { settings, mode } = useSettings();
-  const { bg, color } = getStatusStyle(status, settings, mode);
-  return <span style={{ background: bg, color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", whiteSpace: "nowrap" }}>{status}</span>;
+  const label = item?.label ?? status;
+  let bg, color;
+  if (item?.bg_color) {
+    bg = item.bg_color;
+    color = item.color ?? "inherit";
+  } else {
+    ({ bg, color } = getStatusStyle(status, settings, mode));
+  }
+  return <span style={{ background: bg, color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", whiteSpace: "nowrap" }}>{label}</span>;
 }
 export function Chip({ label, color, bg, onClick }) {
   const c = color ?? "var(--chip-c)";

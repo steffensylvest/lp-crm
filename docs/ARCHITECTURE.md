@@ -4,18 +4,20 @@
 
 ```bash
 # First-time setup (once)
-npm run setup:python      # installs Python deps in python-server/
+npm run install:all           # install root + client npm deps
+npm run setup:python          # installs Python deps
 cp python-server/lp_crm_seed.db python-server/lp_crm.db   # seed the database
 
 # Daily dev
 npm run dev               # starts Python server (3001) + Vite client (5173)
 npm run dev:server        # Python FastAPI server only
 npm run dev:client        # Vite client only
-
 ```
 
 > **IPv6 note:** The server binds to `0.0.0.0` (not just `127.0.0.1`) so macOS
 > `localhost` resolves correctly over both IPv4 and IPv6.
+
+> **Windows note:** `python` and `pip` are used (not `python3`/`pip3`). All npm scripts work cross-platform.
 
 ---
 
@@ -38,40 +40,62 @@ npm run dev:client        # Vite client only
 
 | File | Contents |
 |------|----------|
-| `main.py` | FastAPI app, all route definitions |
+| `main.py` | FastAPI app — includes routes_v2 router |
 | `database.py` | SQLAlchemy engine setup, reads `DATABASE_URL` from `.env` |
-| `models.py` | ORM table definitions (GP, Fund, FundSector, Meeting, PipelineItem, Todo + 3 history tables) |
-| `crud.py` | `get_all_data()`, `upsert_all_data()` (with change detection), history query functions |
-| `migrate.py` | One-time import: `data.json` → SQLite. Usage: `python migrate.py /path/to/data.json`. Idempotent — safe to re-run |
+| `models_v2.py` | ORM: 20 tables (organization, fund, meeting, person, taxonomy_item, lookup_category, lookup_item, audit_log, etc.) |
+| `crud.py` | All CRUD functions + serializers for v2 entities |
+| `routes_v2.py` | `/api/v2/*` router (~40 endpoints) |
+| `seed_v2.py` | Seeds taxonomy + lookup reference data (idempotent) |
+| `migrate_v2.py` | One-time: migrates old CRM_* tables → v2 tables (idempotent) |
+| `preqin_sync.py` | Preqin external DB integration helpers |
 | `lp_crm_seed.db` | Pre-seeded SQLite database for first-time setup — copy to `lp_crm.db` |
 | `requirements.txt` | FastAPI, uvicorn, SQLAlchemy, python-dotenv (Snowflake pkgs commented) |
 | `.env` | `DATABASE_URL=sqlite:///./lp_crm.db` (not committed) |
 | `.env.example` | Template with SQLite + Snowflake connection string examples |
 | `lp_crm.db` | SQLite database file (not committed) |
+| `external/preqin.db` | Preqin export — not committed, place manually |
 
 ### API endpoints
+
+All v2 endpoints are under `/api/v2/`.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Liveness check |
-| GET | `/api/data` | Full CRM dataset |
-| PUT | `/api/data` | Replace entire dataset — called by 800 ms auto-save |
-| GET | `/api/history/fund/{id}/performance` | Performance snapshots, newest first |
-| GET | `/api/history/fund/{id}/raised` | Raised-size snapshots, newest first |
-| GET | `/api/history/fund/{id}/changes` | Change log for fund (score, status, pipeline stage) |
-| GET | `/api/history/gp/{id}/changes` | Change log for GP (score, owner/responsible) |
+| GET | `/api/v2/organizations` | List GPs and placement agents (`?org_type=gp\|placement_agent`) |
+| POST | `/api/v2/organizations` | Create organization |
+| GET/PUT/PATCH/DELETE | `/api/v2/organizations/{id}` | Get, replace, patch, or delete |
+| GET | `/api/v2/funds` | List all funds |
+| POST | `/api/v2/funds` | Create fund |
+| GET/PUT/PATCH/DELETE | `/api/v2/funds/{id}` | Get, replace, patch, or delete |
+| GET | `/api/v2/taxonomy` | Taxonomy tree (`?type=geography\|strategy\|sector\|target_market`) |
+| GET | `/api/v2/lookups` | All lookup categories + items |
+| GET | `/api/v2/lookups/{category_id}` | Items for one category |
+| GET/POST | `/api/v2/notes` | List or create notes |
+| PUT/DELETE | `/api/v2/notes/{id}` | Update or delete note |
+| GET/POST | `/api/v2/meetings` | List or create meetings |
+| GET/PUT/DELETE | `/api/v2/meetings/{id}` | Get, update, or delete meeting |
+| GET/POST | `/api/v2/people` | List or create people |
+| GET/PUT/DELETE | `/api/v2/people/{id}` | Get, update, or delete person |
+| POST | `/api/v2/organizations/{id}/people` | Link person to organization |
+| DELETE | `/api/v2/organizations/{id}/people/{pid}` | Unlink person |
+| GET | `/api/v2/audit` | Change log (`?entity_type=&entity_id=`) |
+| GET/POST | `/api/v2/tasks` | List or create tasks |
+| PUT/DELETE | `/api/v2/tasks/{id}` | Update or delete task |
+| GET | `/api/v2/external/preqin/search` | Search Preqin DB (`?q=`) |
+
+**PATCH** body: `{ "field": "rating_id", "value": "li_fund_rating_a", "note": "...", "changed_by": "..." }` — auto-writes to `audit_log`.
 
 ### Client — root (`client/src/`)
 
 | File | Contents |
 |------|----------|
 | `App.jsx` | App component: state, effects, handlers, view routing |
-| `api.js` | `loadData()`, `saveData()`, history fetch helpers (`loadFundPerformanceHistory`, `loadFundRaisedHistory`, `loadFundChangeHistory`, `loadGpChangeHistory`) |
-| `fallback.js` | `FALLBACK_DATA` — dummy data shown when backend offline |
+| `api.js` | v2 API functions: `loadOrganizations`, `loadFunds`, `loadLookups`, `loadTaxonomy`, `loadMeetings`, `loadPeople`, `loadNotes`, `loadTasks`, `patchFundField`, `patchOrgField`, `searchPreqin`, etc. |
 | `utils.js` | `uid()`, `now()`, `fmt(date)`, `fmtTs(ts)`, `fmtM(val, currency)` |
 | `constants.js` | `SCORE_CONFIG`, `STRATEGY_OPTIONS`, `SUB_STRATEGY_PRESETS`, `SECTOR_OPTIONS`, `CURRENCIES`, `STATUS_OPTIONS`, `PIPELINE_STAGES`, `STATUS_PILL_KEY`, `SHORTCUTS` |
-| `seed.js` | `mkSeed()` — demo fixture data |
 | `theme.js` | `DARK`, `LIGHT` theme objects; `IS`, `ISFilled`, `TA`, `TAFilled`, `btnBase`, `btnPrimary`, `btnGhost`, `btnDanger` style objects |
+| `settingsContext.js` | `SettingsContext`, `useSettings()` — provides settings and theme mode |
 
 ### Client — components (`client/src/components/`)
 
@@ -80,80 +104,47 @@ npm run dev:client        # Vite client only
 | `Badges.jsx` | `ScoreBadge`, `StatusPill`, `Chip`, `SectorChip`, `SubStratChip`, `InvestedBadge` | |
 | `Pickers.jsx` | `ScorePicker`, `StatusPicker`, `TagPicker`, `OwnerPicker`, `StagePicker`, `StrategyPicker`, `SubStrategyPicker`, `EditingContext`, `InlineMetric` | |
 | `Overlay.jsx` | `Overlay`, `OverlayHeader` | |
-| `Forms.jsx` | `Field`, `NoteField`, `GPForm`, `FundForm`, `MeetingForm` | |
+| `Forms.jsx` | `Field`, `NoteField`, `GPForm`, `FundForm`, `MeetingForm`, `PreqinSearch` | |
 | `FundDetail.jsx` | `FundDetailOverlay` | 4 tabs: Overview · Performance · History · Insights |
 | `MeetingDetail.jsx` | `MeetingDetailOverlay` | |
-| `GPDetail.jsx` | `GPDetailOverlay` | 3 tabs: Funds · History · Meetings |
+| `GPDetail.jsx` | `GPDetailOverlay` | 4 tabs: Funds · History · Meetings · People |
+| `PersonDetail.jsx` | `PersonDetailOverlay` | |
+| `PlacementAgentDetail.jsx` | `PlacementAgentDetailOverlay` | |
 | `PipelineBoard.jsx` | `PipelineBoard` | Drag-drop kanban |
 | `FilterDropdown.jsx` | `FilterDropdown` | Multi-select popover |
 | `DenseTable.jsx` | `DenseTable` | Collapsible GP/fund table |
 | `Views.jsx` | `AllMeetingsView`, `AllFundsView`, `TagFilterView`, `GradeAView`, `FundraisingView` | |
+| `DashboardView.jsx` | `DashboardView` | Portfolio stats + activity feed |
+| `DataReview.jsx` | `DataReview` | Data quality inspection and bulk fixes |
+| `GlobalSearch.jsx` | `GlobalSearch` | Instant search across GPs, funds, people, meetings |
+| `Notes.jsx` | `NotesPanel` | Notes per entity |
+| `Tasks.jsx` | `TasksPanel` | Task tracker with due dates |
+| `SettingsView.jsx` | `SettingsView` | Manage team members, lookups, preferences |
 | `SmartAdd.jsx` | `SmartAddModal`, `DataMenu`, `StatCard` | |
-
----
-
-## Component prop signatures
-
-| Component | Props |
-|-----------|-------|
-| `ScoreBadge` | `score` `size?="sm\|lg"` |
-| `StatusPill` | `status` |
-| `Chip` | `label` `color?` `bg?` `onClick?` |
-| `SectorChip` | `label` `onClick?` |
-| `SubStratChip` | `label` `onClick?` |
-| `InvestedBadge` | `amount` `currency` |
-| `ScorePicker` | `score` `onChange` `size?` |
-| `StatusPicker` | `status` `onChange` |
-| `TagPicker` | `selected[]` `options[]` `onChange` |
-| `OwnerPicker` | `owner` `owners[]` `onChange` `placeholder?` |
-| `StagePicker` | `stage` `onChange` |
-| `StrategyPicker` | `strategy` `onChange` |
-| `SubStrategyPicker` | `strategy` `subStrategy` `onChange` |
-| `InlineMetric` | `id` `label` `value` `displayValue?` `onSave` `placeholder?` `type?` |
-| `Overlay` | `onClose` `children` `width?` `zIndex?` |
-| `OverlayHeader` | `title` `subtitle?` `onClose` `actions?` |
-| `Field` | `label` `children` `half?` `third?` |
-| `NoteField` | `value` `onSave` |
-| `GPForm` | `initial?` `onSave` `onClose` `onDelete?` |
-| `FundForm` | `initial?` `onSave` `onClose` `onDelete?` |
-| `MeetingForm` | `initial?` `funds[]` `showFundPicker?` `onSave` `onClose` |
-| `GPDetailOverlay` | `gp` `owners[]` `onClose` `onUpdate` `onTagClick` `onFundClick` `onMeetingClick` `onLogMeeting` `onDeleteGP` |
-| `FundDetailOverlay` | `fund` `gp` `owners[]` `meetings[]` `pipeline[]` `onClose` `onSaveFund` `onPipelineStage` `onAddMeeting` `onTagClick` `onMeetingClick` `onGpClick` `zIndex?` `onEditingChange?` |
-| `MeetingDetailOverlay` | `meeting` `fundName?` `gpName` `onClose` `onEdit` `onDelete` `zIndex?` |
-| `PipelineBoard` | `pipeline[]` `gps[]` `onUpdate` `onFundClick` `onBack` |
-| `FilterDropdown` | `label` `options[]` `selected[]` `onChange` `renderOption?` `accentColor?` `accentBg?` |
-| `DenseTable` | `filtered[]` `allGps[]` `pipeline[]` `onGpClick` `onFundClick` `onMeetingClick` `autoExpand?` |
-| `AllMeetingsView` | `gps[]` `onBack` `onMeetingClick` |
-| `AllFundsView` | `gps[]` `onBack` `onFundClick` `onTagClick` |
-| `TagFilterView` | `type` `value` `gps[]` `onBack` `onFundClick` |
-| `GradeAView` | `gps[]` `onBack` `onGpClick` |
-| `FundraisingView` | `gps[]` `onBack` `onFundClick` |
-| `SmartAddModal` | `gps[]` `onClose` `onAddGP` `onAddFund` `onLogMeeting` |
-| `DataMenu` | `exportData` `fileInputRef` `importData` `onLoadSeed` |
-| `StatCard` | `label` `value` `accent?` `sub?` `onClick?` `shortcut?` |
 
 ---
 
 ## Key patterns
 
-- **No Redux / Context API** (except `EditingContext` for inline-editing lock in FundDetail)
+- **No Redux / Context API** (except `EditingContext` for inline-editing lock, and `SettingsContext` for theme)
 - **All state in App** — passed down as props
 - **Inline styles throughout** — no CSS files, no Tailwind
-- **Auto-save** — 800 ms debounce after any data change → PUT `/api/data`
-- **History auto-refresh** — FundDetail and GPDetail re-fetch history 1.5 s after a tracked field changes (score, status, raisedSize, perf metrics, owner), giving the 800 ms auto-save time to settle first
-- **Keyboard shortcuts** — `/` focuses search, `Esc` closes overlays, F1–F5 switch views
-- **Offline fallback** — if backend unreachable, shows `FALLBACK_DATA` with orange banner
+- **Field-level PATCH** — each field edit calls `PATCH /api/v2/{entity}/{id}` immediately; no bulk save
+- **Audit auto-written** — every PATCH writes to `audit_log` automatically in the backend
+- **Keyboard shortcuts** — `/` focuses global search, `Esc` closes overlays, F1–F5 switch views
 - **Currency formatting** — use `fmtM(val, currency)` from utils.js
+- **Lookup indexing** — `loadLookups()` returns a flat list; App.jsx transforms it to `{ categories, items_by_category }` with slug keys (`lc_pipeline_stage` → `pipeline-stage`)
 - **Snowflake migration** — change `DATABASE_URL` in `python-server/.env` and uncomment Snowflake deps in `requirements.txt`
 
 ---
 
 ## Switching to Snowflake
 
-1. `pip3 install snowflake-sqlalchemy` (or uncomment in `requirements.txt`)
-2. Set in `python-server/.env`:
+1. Uncomment Snowflake packages in `python-server/requirements.txt`
+2. Run `npm run setup:python`
+3. Set in `python-server/.env`:
    ```
    DATABASE_URL=snowflake://USER:PASS@ACCOUNT/DB/SCHEMA?warehouse=WH&role=ROLE
    ```
-3. Restart the server — SQLAlchemy handles the dialect automatically.
-4. Run `python migrate.py /path/to/data.json` once to seed Snowflake.
+4. Restart the server — SQLAlchemy handles the dialect automatically.
+5. Run `python python-server/migrate_v2.py` once to seed Snowflake.

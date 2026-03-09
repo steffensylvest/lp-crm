@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS } from '../constants.js';
 import { useSettings } from '../settingsContext.js';
 import { IS, ISFilled, TA, TAFilled, btnBase, btnPrimary, btnGhost, btnDanger } from '../theme.js';
@@ -7,6 +7,7 @@ import { Chip, SectorChip, SubStratChip } from './Badges.jsx';
 import { ScorePicker, StatusPicker, TagPicker } from './Pickers.jsx';
 import { now } from '../utils.js';
 import { renderMarkdown } from '../markdown.jsx';
+import { searchPreqin } from '../api.js';
 
 // ─── Form Field ───────────────────────────────────────────────────────────────
 export function Field({ label, children, half, third }) {
@@ -96,7 +97,12 @@ export function NoteField({ value, onSave }) {
 
 // ─── GP Form ──────────────────────────────────────────────────────────────────
 export function GPForm({ initial, onSave, onClose, onDelete, owners = [] }) {
-  const [d, setD] = useState(initial || { name: "", hq: "", website: "", score: "C", contact: "", contactEmail: "", owner: "", notes: "" });
+  const [d, setD] = useState(() => {
+    const base = { name: "", hq: "", website: "", score: "C", contact: "", contactEmail: "", owner: "", notes: "" };
+    if (!initial) return base;
+    // Coerce null → "" for string fields (v2 orgs don't have hq/contact text fields)
+    return { ...base, ...initial, hq: initial.hq ?? "", contact: initial.contact ?? "", contactEmail: initial.contactEmail ?? "", notes: initial.notes ?? "" };
+  });
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
   const fi = (v) => v ? ISFilled : IS; // filled vs empty style
   return (
@@ -157,6 +163,91 @@ export function PAForm({ initial, onSave, onClose, onDelete }) {
   );
 }
 
+// ─── Preqin Fund Search ───────────────────────────────────────────────────────
+// Inline combobox: type to search, click to link. Shows current link if set.
+function PreqinSearch({ preqinFundId, preqinSeriesId, onChange }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef(null);
+  const wrapRef = useRef(null);
+
+  // Debounced search
+  useEffect(() => {
+    clearTimeout(timerRef.current);
+    if (query.trim().length < 2) { setResults([]); setOpen(false); return; }
+    timerRef.current = setTimeout(() => {
+      setLoading(true);
+      searchPreqin(query).then(r => { setResults(r); setOpen(true); }).catch(() => setResults([])).finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(timerRef.current);
+  }, [query]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const select = (r) => {
+    onChange({ preqin_fund_id: String(r.fund_id), preqin_series_id: r.series_id ? String(r.series_id) : null });
+    setQuery(""); setResults([]); setOpen(false);
+  };
+  const unlink = () => onChange({ preqin_fund_id: null, preqin_series_id: null });
+
+  const inp = { width: "100%", background: "var(--card)", border: "1px solid var(--border-hi)", borderRadius: "6px", color: "var(--tx1)", padding: "0.45rem 0.65rem", fontSize: "0.825rem", outline: "none", boxSizing: "border-box" };
+  const dropItem = { display: "flex", flexDirection: "column", gap: "0.15rem", padding: "0.5rem 0.75rem", cursor: "pointer", borderBottom: "1px solid var(--border)" };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      {preqinFundId ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", background: "var(--card)", border: "1px solid var(--border)", borderRadius: "6px", padding: "0.4rem 0.65rem" }}>
+          <span style={{ fontSize: "0.7rem", color: "var(--tx5)", flexShrink: 0 }}>Preqin ID</span>
+          <span style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "var(--tx1)", fontWeight: 600 }}>{preqinFundId}</span>
+          {preqinSeriesId && <span style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "var(--tx4)" }}>series {preqinSeriesId}</span>}
+          <button type="button" onClick={unlink} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--tx5)", cursor: "pointer", fontSize: "0.75rem", padding: "0 0.2rem" }} title="Unlink">✕</button>
+        </div>
+      ) : (
+        <input
+          style={inp}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search by fund name or manager…"
+        />
+      )}
+      {!preqinFundId && loading && <div style={{ position: "absolute", right: "0.6rem", top: "0.5rem", color: "var(--tx5)", fontSize: "0.7rem" }}>…</div>}
+      {open && results.length > 0 && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border-hi)", borderRadius: "8px", zIndex: 300, maxHeight: "220px", overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.7)" }}>
+          {results.map(r => (
+            <div key={r.fund_id} style={dropItem}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+              onMouseDown={e => { e.preventDefault(); select(r); }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem" }}>
+                <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.825rem" }}>{r.name}</span>
+                {r.vintage && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>{r.vintage}</span>}
+                {r.status && <span style={{ color: "var(--tx4)", fontSize: "0.68rem", marginLeft: "auto" }}>{r.status}</span>}
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <span style={{ color: "var(--tx4)", fontSize: "0.72rem" }}>{r.manager}</span>
+                {r.strategy && <span style={{ color: "var(--tx5)", fontSize: "0.68rem" }}>· {r.strategy}</span>}
+                {r.geo_focus && <span style={{ color: "var(--tx5)", fontSize: "0.68rem" }}>· {r.geo_focus}</span>}
+                {r.final_size_usd && <span style={{ color: "var(--tx5)", fontSize: "0.68rem" }}>· USD {Number(r.final_size_usd).toLocaleString()}M</span>}
+                <span style={{ color: "var(--tx5)", fontSize: "0.65rem", marginLeft: "auto", fontFamily: "monospace" }}>#{r.fund_id}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {open && !loading && results.length === 0 && query.trim().length >= 2 && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "0.6rem 0.75rem", color: "var(--tx5)", fontSize: "0.8rem", zIndex: 300 }}>No matches found</div>
+      )}
+    </div>
+  );
+}
+
 // ─── Fund Form ────────────────────────────────────────────────────────────────
 export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOwner }) {
   const { settings } = useSettings();
@@ -165,8 +256,15 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
   const effectiveSubPresets = settings.subStrategyPresets ?? SUB_STRATEGY_PRESETS;
   const effectiveStatuses = settings.statusOptions ?? STATUS_OPTIONS;
 
-  const empty = { name: "", series: "", strategy: effectiveStrategies[0] || "Buyout", subStrategy: "", sectors: [], vintage: "", targetSize: "", hardCap: "", raisedSize: "", raisedDate: "", finalSize: "", currency: "USD", status: effectiveStatuses[0] || "Fundraising", launchDate: "", firstCloseDate: "", nextCloseDate: "", finalCloseDate: "", nextMarket: "", score: "C", owner: "", notes: "", invested: false, investmentAmount: "", investmentCurrency: "USD" };
-  const [d, setD] = useState(initial || empty);
+  const empty = { name: "", series: "", strategy: effectiveStrategies[0] || "Buyout", subStrategy: "", sectors: [], vintage: "", targetSize: "", hardCap: "", raisedSize: "", raisedDate: "", finalSize: "", currency: "USD", status: effectiveStatuses[0] || "Fundraising", launchDate: "", firstCloseDate: "", nextCloseDate: "", finalCloseDate: "", nextMarket: "", score: "C", owner: "", notes: "", invested: false, investmentAmount: "", investmentCurrency: "USD", preqin_fund_id: null, preqin_series_id: null };
+  const [d, setD] = useState(() => {
+    if (!initial) return empty;
+    // Coerce null → "" for string fields (v2 funds use camelCase aliases but may have null values)
+    const merged = { ...empty, ...initial };
+    const strKeys = ['name','series','subStrategy','vintage','targetSize','hardCap','raisedSize','raisedDate','finalSize','launchDate','firstCloseDate','nextCloseDate','finalCloseDate','nextMarket','owner','notes','investmentAmount'];
+    strKeys.forEach(k => { if (merged[k] == null) merged[k] = ""; });
+    return merged;
+  });
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
   const subPresets = effectiveSubPresets[d.strategy] || [];
   const fi = (v) => v ? ISFilled : IS;
@@ -252,6 +350,17 @@ export function FundForm({ initial, onSave, onClose, onDelete, owners = [], gpOw
       </div>
 
       <Field label="Notes"><textarea style={d.notes ? TAFilled : TA} value={d.notes} onChange={e => set("notes", e.target.value)} placeholder="Investment thesis, concerns, key terms…" /></Field>
+
+      {/* ── Preqin ── */}
+      {sec("Preqin", "#6366f1")}
+      <div style={{ gridColumn: "span 2" }}>
+        <PreqinSearch
+          preqinFundId={d.preqin_fund_id}
+          preqinSeriesId={d.preqin_series_id}
+          onChange={({ preqin_fund_id, preqin_series_id }) => setD(p => ({ ...p, preqin_fund_id, preqin_series_id }))}
+        />
+      </div>
+
       <div style={{ gridColumn: "span 2", display: "flex", gap: "0.75rem", justifyContent: "space-between", paddingTop: "0.5rem", alignItems: "center" }}>
         {onDelete && (
           <button onClick={() => {
@@ -295,7 +404,20 @@ function DateInput({ value, onChange }) {
 
 // ─── Meeting Form ─────────────────────────────────────────────────────────────
 export function MeetingForm({ initial, funds, onSave, onClose, showFundPicker = true, unitMembers = [] }) {
-  const [d, setD] = useState({ attendeesThem: [], attendeesUs: [], ...(initial || { date: "", type: "Virtual", location: "", topic: "", notes: "", fundId: null, loggedBy: "Me", loggedAt: now() }) });
+  const [d, setD] = useState(() => {
+    const base = { date: "", type: "Virtual", location: "", topic: "", notes: "", fundId: null, loggedBy: "Me", loggedAt: now(), attendeesThem: [], attendeesUs: [] };
+    if (!initial) return base;
+    return {
+      ...base, ...initial,
+      // v2 meetings have type as a lookup_item object — flatten to string for the select
+      type: initial.type?.label ?? initial.type ?? "Virtual",
+      // v2 field name compat
+      loggedBy: initial.loggedBy ?? initial.created_by ?? "Me",
+      location: initial.location ?? "",
+      topic: initial.topic ?? "",
+      notes: initial.notes ?? "",
+    };
+  });
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
   const fi = (v) => v ? ISFilled : IS;
   const [theirDraft, setTheirDraft] = useState("");

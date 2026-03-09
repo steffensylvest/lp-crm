@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from "react";
-import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS, PIPELINE_STAGES } from '../constants.js';
 import { IS, ISFilled, btnBase, btnPrimary, btnGhost } from '../theme.js';
 import { uid, now } from '../utils.js';
 import { Chip } from './Badges.jsx';

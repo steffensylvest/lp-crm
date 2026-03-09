@@ -6,6 +6,10 @@ import { Chip } from './Badges.jsx';
 import { Overlay, OverlayHeader } from './Overlay.jsx';
 
 export function MeetingDetailOverlay({ meeting, fundName, gpName, onClose, onEdit, onDelete, zIndex = 1000 }) {
+  // Support both legacy (camelCase) and v2 (snake_case) field names
+  const typeLabel  = meeting.type?.label ?? meeting.type ?? "—";
+  const loggedBy   = meeting.created_by  ?? meeting.loggedBy  ?? "Unknown";
+  const loggedAt   = meeting.created_at  ?? meeting.loggedAt  ?? null;
   return (
     <Overlay onClose={onClose} width="580px" zIndex={zIndex}>
       <OverlayHeader
@@ -23,7 +27,7 @@ export function MeetingDetailOverlay({ meeting, fundName, gpName, onClose, onEdi
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.65rem", marginBottom: "1.25rem" }}>
           {[
             { label: "Date", value: fmt(meeting.date) },
-            { label: "Type", value: meeting.type },
+            { label: "Type", value: typeLabel },
             { label: "Location", value: meeting.location || "—" },
           ].map(({ label, value }) => (
             <div key={label} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", padding: "0.65rem 0.9rem" }}>
@@ -44,8 +48,8 @@ export function MeetingDetailOverlay({ meeting, fundName, gpName, onClose, onEdi
           </div>
         )}
         <div style={{ color: "var(--tx5)", fontSize: "0.72rem", borderTop: "1px solid var(--border)", paddingTop: "0.75rem" }}>
-          Logged by <span style={{ color: "var(--tx4)" }}>{meeting.loggedBy || "Unknown"}</span>
-          {meeting.loggedAt && <> · <span style={{ color: "var(--tx4)" }}>{fmtTs(meeting.loggedAt)}</span></>}
+          Logged by <span style={{ color: "var(--tx4)" }}>{loggedBy}</span>
+          {loggedAt && <> · <span style={{ color: "var(--tx4)" }}>{fmtTs(loggedAt)}</span></>}
         </div>
       </div>
     </Overlay>

@@ -25,27 +25,36 @@ const popover = (extra = {}) => ({
 const popoverLabel = { color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", padding: "0.2rem 0.4rem 0.5rem" };
 
 // Clickable score badge that opens a compact picker popover
-export function ScorePicker({ score, onChange, size = "sm" }) {
+// items: optional [{ code, label, color, bg_color }] from v2 API — falls back to SCORE_CONFIG
+export function ScorePicker({ score, onChange, size = "sm", items }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
   useOutsideClick(ref, () => setOpen(false));
+
+  // Normalise to a consistent shape regardless of source
+  const entries = items
+    ? items.map(i => ({ code: i.code, label: i.label, desc: i.label, bg: i.bg_color, c: i.color, bd: `${i.color}40` }))
+    : Object.entries(SCORE_CONFIG).map(([k, v]) => ({ code: k, label: k, desc: v.desc, bg: `var(--sb-${k}-bg)`, c: `var(--sb-${k}-c)`, bd: `var(--sb-${k}-bd)` }));
+
+  const current = entries.find(e => e.code === score) ?? { bg: `var(--sb-${score}-bg)`, c: `var(--sb-${score}-c)`, bd: `var(--sb-${score}-bd)`, label: score };
+
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ background: `var(--sb-${score}-bg)`, color: `var(--sb-${score}-c)`, border: `1px solid var(--sb-${score}-bd)`, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
-        {score}
+        style={{ background: current.bg, color: current.c, border: `1px solid ${current.bd}`, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
+        {current.label}
       </span>
       {open && (
         <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "200px" })}>
           <div style={popoverLabel}>Rating</div>
-          {Object.entries(SCORE_CONFIG).map(([k, v]) => (
-            <div key={k} onClick={() => { onChange(k); setOpen(false); }}
-              style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.45rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: k === score ? `var(--sb-${k}-bg)` : "none", transition: "background 0.1s" }}
-              onMouseEnter={e => { if (k !== score) e.currentTarget.style.background = "var(--hover)"; }}
-              onMouseLeave={e => { if (k !== score) e.currentTarget.style.background = "none"; }}>
-              <span style={{ background: `var(--sb-${k}-bg)`, color: `var(--sb-${k}-c)`, border: `1px solid var(--sb-${k}-bd)`, borderRadius: "3px", padding: "0.1rem 0.45rem", fontSize: "0.75rem", fontWeight: 700, fontFamily: "monospace", minWidth: "20px", textAlign: "center" }}>{k}</span>
-              <span style={{ color: k === score ? `var(--sb-${k}-c)` : "var(--tx4)", fontSize: "0.8rem" }}>{v.desc}</span>
-              {k === score && <span style={{ marginLeft: "auto", color: `var(--sb-${k}-c)`, fontSize: "0.7rem" }}>✓</span>}
+          {entries.map(e => (
+            <div key={e.code} onClick={() => { onChange(e.code); setOpen(false); }}
+              style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.45rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: e.code === score ? e.bg : "none", transition: "background 0.1s" }}
+              onMouseEnter={el => { if (e.code !== score) el.currentTarget.style.background = "var(--hover)"; }}
+              onMouseLeave={el => { if (e.code !== score) el.currentTarget.style.background = "none"; }}>
+              <span style={{ background: e.bg, color: e.c, border: `1px solid ${e.bd}`, borderRadius: "3px", padding: "0.1rem 0.45rem", fontSize: "0.75rem", fontWeight: 700, fontFamily: "monospace", minWidth: "20px", textAlign: "center" }}>{e.label}</span>
+              <span style={{ color: e.code === score ? e.c : "var(--tx4)", fontSize: "0.8rem" }}>{e.desc}</span>
+              {e.code === score && <span style={{ marginLeft: "auto", color: e.c, fontSize: "0.7rem" }}>✓</span>}
             </div>
           ))}
         </div>
@@ -55,34 +64,38 @@ export function ScorePicker({ score, onChange, size = "sm" }) {
 }
 
 // Clickable status pill that opens a compact picker
-export function StatusPicker({ status, onChange }) {
+// items: optional [{ code, label, color, bg_color }] from v2 API — falls back to hardcoded STATUS_OPTIONS
+export function StatusPicker({ status, onChange, items }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
   const { settings, mode } = useSettings();
-  const effectiveStatuses = settings.statusOptions ?? STATUS_OPTIONS;
   useOutsideClick(ref, () => setOpen(false));
-  const { bg, color } = getStatusStyle(status, settings, mode);
+
+  // Normalise: items from API or string list from settings/constants
+  const entries = items
+    ? items.map(i => ({ code: i.code, label: i.label, bg: i.bg_color, color: i.color }))
+    : (settings.statusOptions ?? STATUS_OPTIONS).map(s => { const ss = getStatusStyle(s, settings, mode); return { code: s, label: s, bg: ss.bg, color: ss.color }; });
+
+  const current = entries.find(e => e.code === status) ?? (() => { const ss = getStatusStyle(status, settings, mode); return { bg: ss.bg, color: ss.color, label: status }; })();
+
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
       <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ background: bg, color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
-        {status}
+        style={{ background: current.bg, color: current.color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
+        {current.label}
       </span>
       {open && (
         <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "160px" })}>
           <div style={popoverLabel}>Status</div>
-          {effectiveStatuses.map(s => {
-            const ss = getStatusStyle(s, settings, mode);
-            return (
-              <div key={s} onClick={() => { onChange(s); setOpen(false); }}
-                style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: s === status ? ss.bg : "none" }}
-                onMouseEnter={e => { if (s !== status) e.currentTarget.style.background = "var(--hover)"; }}
-                onMouseLeave={e => { if (s !== status) e.currentTarget.style.background = "none"; }}>
-                <span style={{ background: ss.bg, color: ss.color, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.72rem", minWidth: "90px" }}>{s}</span>
-                {s === status && <span style={{ color: ss.color, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
-              </div>
-            );
-          })}
+          {entries.map(e => (
+            <div key={e.code} onClick={() => { onChange(e.code); setOpen(false); }}
+              style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: e.code === status ? e.bg : "none" }}
+              onMouseEnter={el => { if (e.code !== status) el.currentTarget.style.background = "var(--hover)"; }}
+              onMouseLeave={el => { if (e.code !== status) el.currentTarget.style.background = "none"; }}>
+              <span style={{ background: e.bg, color: e.color, borderRadius: "3px", padding: "0.05rem 0.45rem", fontSize: "0.72rem", minWidth: "90px" }}>{e.label}</span>
+              {e.code === status && <span style={{ color: e.color, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -158,11 +171,14 @@ export function OwnerPicker({ owner, owners = [], onChange, placeholder }) {
 }
 
 // Clickable pipeline stage pill that opens a compact picker
-export function StagePicker({ stage, onChange }) {
+// items: optional [{ code, label, color, bg_color }] from v2 API — falls back to hardcoded PIPELINE_STAGES
+export function StagePicker({ stage, onChange, items }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
   const { settings } = useSettings();
-  const effectiveStages = settings.pipelineStages ?? PIPELINE_STAGES;
+  const effectiveStages = items
+    ? items.map(i => ({ id: i.code, label: i.label, bg: i.bg_color ?? "var(--subtle)", bd: i.color ?? "var(--border)", ac: i.color ?? "var(--tx3)" }))
+    : (settings.pipelineStages ?? PIPELINE_STAGES);
   useOutsideClick(ref, () => setOpen(false));
   const current = effectiveStages.find(s => s.id === stage);
   return (
@@ -197,11 +213,14 @@ export function StagePicker({ stage, onChange }) {
 }
 
 // Clickable strategy picker
-export function StrategyPicker({ strategy, onChange }) {
+// items: optional [{ code, label }] from v2 taxonomy — falls back to hardcoded STRATEGY_OPTIONS
+export function StrategyPicker({ strategy, onChange, items }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
   const { settings } = useSettings();
-  const effectiveStrategies = settings.strategies ?? STRATEGY_OPTIONS;
+  const effectiveStrategies = items
+    ? items.map(i => i.code ?? i.name)
+    : (settings.strategies ?? STRATEGY_OPTIONS);
   useOutsideClick(ref, () => setOpen(false));
   return (
     <div ref={ref} style={{ position: "relative" }}>

@@ -68,7 +68,7 @@ def _migrate_columns() -> None:
 
 def init_db() -> None:
     """Create all tables that don't yet exist. Safe to call on every startup."""
-    import models  # noqa: F401 — imports register models on Base.metadata
+    import models  # noqa: F401 — registers all tables on Base.metadata
     Base.metadata.create_all(bind=engine)
     _migrate_columns()
     print(f"[db] Connected to {DATABASE_URL.split('?')[0]}")
