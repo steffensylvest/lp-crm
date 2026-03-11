@@ -78,22 +78,11 @@ export function SmartAddModal({ gps, onClose, onAddGP, onAddFund, onLogMeeting, 
             )}
 
             {mode === "fund" && (
-              <div>
-                {gps.length > 1 && (
-                  <div style={{ marginBottom: "1rem" }}>
-                    <label style={{ display: "block", color: "var(--tx3)", fontSize: "0.7rem", fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: "0.35rem" }}>Which GP is this fund for?</label>
-                    <select style={selectedGPId ? ISFilled : IS} value={selectedGPId} onChange={e => setSelectedGPId(e.target.value)}>
-                      <option value="">— Select GP —</option>
-                      {gps.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                    </select>
-                  </div>
-                )}
-                {selectedGPId ? (
-                  <FundForm onSave={(d) => { onAddFund(selectedGPId, d); onClose(); }} onClose={onClose} />
-                ) : (
-                  <div style={{ color: "var(--tx4)", textAlign: "center", padding: "2rem", fontSize: "0.875rem" }}>Select a GP above to continue</div>
-                )}
-              </div>
+              <FundForm
+                showGPPicker={true}
+                onSave={(created, orgId) => { onAddFund(orgId, created); onClose(); }}
+                onClose={onClose}
+              />
             )}
 
             {mode === "meeting" && (

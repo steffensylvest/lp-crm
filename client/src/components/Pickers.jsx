@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { SCORE_CONFIG, STATUS_OPTIONS, PIPELINE_STAGES, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS } from '../constants.js';
 import { IS } from '../theme.js';
 import { Chip, getStatusStyle } from './Badges.jsx';
 import { useSettings } from '../settingsContext.js';
 
-// Shared hook: close popover when clicking outside
-function useOutsideClick(ref, onClose) {
+// Shared hook: close popover when clicking outside (accepts single ref or array)
+export function useOutsideClick(refs, onClose) {
   useEffect(() => {
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const refsArr = Array.isArray(refs) ? refs : [refs];
+    const h = (e) => { if (refsArr.every(r => !r.current?.contains(e.target))) onClose(); };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
@@ -28,24 +30,34 @@ const popoverLabel = { color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 600
 // items: optional [{ code, label, color, bg_color }] from v2 API — falls back to SCORE_CONFIG
 export function ScorePicker({ score, onChange, size = "sm", items }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const ref = useRef();
-  useOutsideClick(ref, () => setOpen(false));
+  const portalRef = useRef();
+  useOutsideClick([ref, portalRef], () => setOpen(false));
 
-  // Normalise to a consistent shape regardless of source
   const entries = items
     ? items.map(i => ({ code: i.code, label: i.label, desc: i.label, bg: i.bg_color, c: i.color, bd: `${i.color}40` }))
     : Object.entries(SCORE_CONFIG).map(([k, v]) => ({ code: k, label: k, desc: v.desc, bg: `var(--sb-${k}-bg)`, c: `var(--sb-${k}-c)`, bd: `var(--sb-${k}-bd)` }));
 
   const current = entries.find(e => e.code === score) ?? { bg: `var(--sb-${score}-bg)`, c: `var(--sb-${score}-c)`, bd: `var(--sb-${score}-bd)`, label: score };
 
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ background: current.bg, color: current.c, border: `1px solid ${current.bd}`, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
-        {current.label}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
+        style={{ background: score ? current.bg : "var(--subtle)", color: score ? current.c : "var(--tx5)", border: `1px solid ${score ? current.bd : "var(--border)"}`, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: score ? 700 : 400, fontFamily: "monospace", letterSpacing: "0.05em", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
+        {current.label ?? "—"}
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "200px" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "200px" }}>
           <div style={popoverLabel}>Rating</div>
           {entries.map(e => (
             <div key={e.code} onClick={() => { onChange(e.code); setOpen(false); }}
@@ -57,7 +69,8 @@ export function ScorePicker({ score, onChange, size = "sm", items }) {
               {e.code === score && <span style={{ marginLeft: "auto", color: e.c, fontSize: "0.7rem" }}>✓</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -67,25 +80,35 @@ export function ScorePicker({ score, onChange, size = "sm", items }) {
 // items: optional [{ code, label, color, bg_color }] from v2 API — falls back to hardcoded STATUS_OPTIONS
 export function StatusPicker({ status, onChange, items }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const ref = useRef();
+  const portalRef = useRef();
   const { settings, mode } = useSettings();
-  useOutsideClick(ref, () => setOpen(false));
+  useOutsideClick([ref, portalRef], () => setOpen(false));
 
-  // Normalise: items from API or string list from settings/constants
   const entries = items
     ? items.map(i => ({ code: i.code, label: i.label, bg: i.bg_color, color: i.color }))
     : (settings.statusOptions ?? STATUS_OPTIONS).map(s => { const ss = getStatusStyle(s, settings, mode); return { code: s, label: s, bg: ss.bg, color: ss.color }; });
 
   const current = entries.find(e => e.code === status) ?? (() => { const ss = getStatusStyle(status, settings, mode); return { bg: ss.bg, color: ss.color, label: status }; })();
 
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        style={{ background: current.bg, color: current.color, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
-        {current.label}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
+        style={{ background: status ? current.bg : "var(--subtle)", color: status ? current.color : "var(--tx5)", border: `1px solid ${status ? "transparent" : "var(--border)"}`, borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
+        {current.label ?? "—"}
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "160px" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "160px" }}>
           <div style={popoverLabel}>Status</div>
           {entries.map(e => (
             <div key={e.code} onClick={() => { onChange(e.code); setOpen(false); }}
@@ -96,7 +119,8 @@ export function StatusPicker({ status, onChange, items }) {
               {e.code === status && <span style={{ color: e.color, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -132,21 +156,33 @@ export function TagPicker({ selected = [], options, onChange }) {
 // Clickable owner tag that opens a compact picker
 export function OwnerPicker({ owner, owners = [], onChange, placeholder }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const ref = useRef();
-  useOutsideClick(ref, () => setOpen(false));
+  const portalRef = useRef();
+  useOutsideClick([ref, portalRef], () => setOpen(false));
   const allOptions = owner && !owners.includes(owner) ? [owner, ...owners] : owners;
   const display = owner || placeholder;
+
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
         style={{ background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.25)", borderRadius: "20px", padding: "0.15rem 0.6rem", fontSize: "0.72rem", color: display ? (owner ? "var(--tx2)" : "var(--tx4)") : "var(--tx5)", fontWeight: owner ? 500 : 400, cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center", transition: "border-color 0.15s, background 0.15s" }}
         onMouseEnter={e => { e.currentTarget.style.background = "rgba(99,102,241,0.18)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.45)"; }}
         onMouseLeave={e => { e.currentTarget.style.background = "rgba(99,102,241,0.1)"; e.currentTarget.style.borderColor = "rgba(99,102,241,0.25)"; }}
       >
         <span>{display || "No owner"}{!owner && placeholder ? " ↑" : ""}</span>
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "150px" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "150px" }}>
           <div style={popoverLabel}>Responsible</div>
           <div onClick={() => { onChange(null); setOpen(false); }}
             style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: !owner ? "var(--subtle)" : "none" }}
@@ -164,7 +200,8 @@ export function OwnerPicker({ owner, owners = [], onChange, placeholder }) {
               {o === owner && <span style={{ marginLeft: "auto", color: "var(--tx3)", fontSize: "0.7rem" }}>✓</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -174,21 +211,33 @@ export function OwnerPicker({ owner, owners = [], onChange, placeholder }) {
 // items: optional [{ code, label, color, bg_color }] from v2 API — falls back to hardcoded PIPELINE_STAGES
 export function StagePicker({ stage, onChange, items }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const ref = useRef();
+  const portalRef = useRef();
   const { settings } = useSettings();
   const effectiveStages = items
     ? items.map(i => ({ id: i.code, label: i.label, bg: i.bg_color ?? "var(--subtle)", bd: i.color ?? "var(--border)", ac: i.color ?? "var(--tx3)" }))
     : (settings.pipelineStages ?? PIPELINE_STAGES);
-  useOutsideClick(ref, () => setOpen(false));
+  useOutsideClick([ref, portalRef], () => setOpen(false));
   const current = effectiveStages.find(s => s.id === stage);
+
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
         style={{ background: current ? current.bg : "var(--subtle)", border: `1px solid ${current ? current.bd : "var(--border)"}`, color: current ? current.ac : "var(--tx4)", borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
         {current ? current.label : "No stage"}
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "170px" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "170px" }}>
           <div style={popoverLabel}>Pipeline Stage</div>
           <div onClick={() => { onChange(null); setOpen(false); }}
             style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer", background: !stage ? "var(--subtle)" : "none" }}
@@ -206,7 +255,8 @@ export function StagePicker({ stage, onChange, items }) {
               {s.id === stage && <span style={{ color: s.ac, fontSize: "0.7rem", marginLeft: "auto" }}>✓</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -216,20 +266,32 @@ export function StagePicker({ stage, onChange, items }) {
 // items: optional [{ code, label }] from v2 taxonomy — falls back to hardcoded STRATEGY_OPTIONS
 export function StrategyPicker({ strategy, onChange, items }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const ref = useRef();
+  const portalRef = useRef();
   const { settings } = useSettings();
   const effectiveStrategies = items
     ? items.map(i => i.code ?? i.name)
     : (settings.strategies ?? STRATEGY_OPTIONS);
-  useOutsideClick(ref, () => setOpen(false));
+  useOutsideClick([ref, portalRef], () => setOpen(false));
+
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
         style={{ background: "var(--subtle)", border: "1px solid var(--border)", color: strategy ? "var(--tx2)" : "var(--tx5)", borderRadius: "4px", padding: "0.15rem 0.55rem", fontSize: "0.78rem", fontWeight: strategy ? 600 : 400, cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
         {strategy || "—"}
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "190px", maxHeight: "280px", overflowY: "auto" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "190px", maxHeight: "280px", overflowY: "auto" }}>
           <div style={popoverLabel}>Strategy</div>
           <div onClick={() => { onChange(null); setOpen(false); }}
             style={{ padding: "0.4rem 0.6rem", borderRadius: "6px", cursor: "pointer" }}
@@ -246,7 +308,8 @@ export function StrategyPicker({ strategy, onChange, items }) {
               {s === strategy && <span style={{ color: "var(--tx4)", fontSize: "0.7rem" }}>✓</span>}
             </div>
           ))}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -255,23 +318,35 @@ export function StrategyPicker({ strategy, onChange, items }) {
 // Clickable sub-strategy picker — presets from selected strategy + free-text input
 export function SubStrategyPicker({ strategy, subStrategy, onChange }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const [text, setText] = useState(subStrategy || "");
   const ref = useRef();
+  const portalRef = useRef();
   const inputRef = useRef();
   const { settings } = useSettings();
   const effectivePresets = settings.subStrategyPresets ?? SUB_STRATEGY_PRESETS;
-  useOutsideClick(ref, () => setOpen(false));
+  useOutsideClick([ref, portalRef], () => setOpen(false));
   useEffect(() => { if (open) { setText(subStrategy || ""); setTimeout(() => inputRef.current?.focus(), 30); } }, [open]);
   const options = strategy ? (effectivePresets[strategy] || []) : [];
   const save = (val) => { onChange(val || null); setOpen(false); };
+
+  const handleToggle = (e) => {
+    e.stopPropagation();
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(o => !o);
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <span onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+    <div ref={ref} style={{ display: "inline-block" }}>
+      <span onClick={handleToggle}
         style={{ background: "var(--subtle)", border: "1px solid var(--border)", color: subStrategy ? "var(--tx3)" : "var(--tx5)", borderRadius: "4px", padding: "0.1rem 0.5rem", fontSize: "0.72rem", fontWeight: 400, cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center" }}>
         {subStrategy || "—"}
       </span>
-      {open && (
-        <div onClick={e => e.stopPropagation()} style={popover({ minWidth: "210px", maxHeight: "300px", overflowY: "auto" })}>
+      {open && pos && createPortal(
+        <div ref={portalRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 9000, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "0.5rem", boxShadow: "0 12px 40px rgba(0,0,0,0.8)", minWidth: "210px", maxHeight: "300px", overflowY: "auto" }}>
           <div style={popoverLabel}>Sub-strategy</div>
           <input ref={inputRef} value={text} onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") save(text.trim()); if (e.key === "Escape") setOpen(false); }}
@@ -294,7 +369,8 @@ export function SubStrategyPicker({ strategy, subStrategy, onChange }) {
               <span style={{ color: "var(--tx5)", fontSize: "0.75rem", fontStyle: "italic" }}>× Clear</span>
             </div>
           )}
-        </div>
+        </div>,
+        document.getElementById("portal-root") ?? document.body
       )}
     </div>
   );
@@ -374,3 +450,71 @@ export function InlineMetric({ id, label, value, displayValue, onSave, placehold
     </div>
   );
 }
+
+// ── ProvenanceMetric ──────────────────────────────────────────────────────────
+// Wraps InlineMetric with Preqin suggestion display when own value is missing.
+// Shows amber value + "Preqin" badge; Accept button appears on hover only.
+// Shared by FundDetailOverlay and GPDetailOverlay.
+export function ProvenanceMetric({ fieldName, provenanceRows, onAcceptProvenance, value, displayValue, ...rest }) {
+  const [hovered, setHovered] = useState(false);
+  const pending = provenanceRows?.find(r => r.field_name === fieldName && r.status === "pending");
+  const showSuggestion = !!pending && !value;
+
+  // displayValue may be a precomputed string OR a format function (v) => string
+  // Using a function allows suggestion values to be formatted the same way as own values
+  const fmt = (v) => typeof displayValue === 'function' ? displayValue(v) : displayValue;
+
+  const suggestionDisplay = showSuggestion ? (
+    <span style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.2rem" }}>
+      <span style={{ color: "#f59e0b", opacity: 0.85, fontWeight: 600 }}>{fmt(pending.value) || pending.value}</span>
+      <span style={{ fontSize: "0.52rem", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "3px", padding: "0.05rem 0.3rem", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, flexShrink: 0 }}>Preqin</span>
+    </span>
+  ) : fmt(value);
+
+  return (
+    <div style={{ position: "relative", minWidth: 0 }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}>
+      <InlineMetric value={showSuggestion ? pending.value : value} displayValue={suggestionDisplay} {...rest} />
+      {showSuggestion && hovered && (
+        <button
+          onClick={e => { e.stopPropagation(); onAcceptProvenance && onAcceptProvenance(pending.id); }}
+          style={{ position: "absolute", top: "5px", right: "5px", background: "#16a34a", color: "#fff", border: "none", borderRadius: "4px", padding: "0.12rem 0.45rem", fontSize: "0.62rem", cursor: "pointer", fontWeight: 700, zIndex: 2, lineHeight: 1.4 }}>
+          ✓ Accept
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Human-readable labels for Preqin provenance field names (fund + org)
+export const PROVENANCE_FIELD_LABELS = {
+  // Fund fields
+  net_irr:           "Net IRR",
+  net_moic:          "Net MOIC",
+  tvpi:              "TVPI",
+  gross_irr:         "Gross IRR",
+  gross_moic:        "Gross MOIC",
+  dpi:               "DPI",
+  rvpi:              "RVPI",
+  nav:               "NAV",
+  undrawn_value:     "Undrawn Value",
+  perf_date:         "Performance Date",
+  vintage:           "Vintage",
+  target_size:       "Target Size",
+  final_size:        "Final Size",
+  currency:          "Currency",
+  quartile_ranking:  "Quartile",
+  benchmark_name:    "Benchmark",
+  pme:               "PME (S&P 500 LN)",
+  pme_index:         "PME+ (S&P 500)",
+  // Org fields
+  name:                  "Firm Name",
+  website:               "Website",
+  aum:                   "AUM (USD M)",
+  aum_date:              "AUM Date",
+  aum_currency:          "AUM Currency",
+  founded_year:          "Year Founded",
+  investment_team_size:  "Investment Team",
+  total_team_size:       "Total Staff",
+};

@@ -2,16 +2,44 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { SCORE_CONFIG, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS, SECTOR_OPTIONS, CURRENCIES, STATUS_OPTIONS, PIPELINE_STAGES } from '../constants.js';
 import { IS, ISFilled, TA, TAFilled, btnBase, btnPrimary, btnGhost, btnDanger } from '../theme.js';
 import { fmt, fmtM } from '../utils.js';
-import { loadAuditLog } from '../api.js';
+import { loadAuditLog, patchFundField, loadMeetings } from '../api.js';
 import { ScoreBadge, StatusPill, SectorChip } from './Badges.jsx';
-import { ScorePicker, StatusPicker, OwnerPicker, StagePicker, StrategyPicker, SubStrategyPicker, EditingContext, InlineMetric } from './Pickers.jsx';
+import { ScorePicker, StatusPicker, OwnerPicker, StagePicker, StrategyPicker, SubStrategyPicker, EditingContext, InlineMetric, ProvenanceMetric, PROVENANCE_FIELD_LABELS } from './Pickers.jsx';
 import { Overlay, OverlayHeader } from './Overlay.jsx';
 import { FundForm } from './Forms.jsx';
 import { NoteField } from './Forms.jsx';
-import { ProvenanceBanner } from './DataReview.jsx';
 
 // Human-readable labels for change-log field names
 const CHANGE_FIELD_LABELS = { score: "Rating", status: "Status", stage: "Pipeline Stage", owner: "Responsible" };
+
+// camelCase → snake_case API field name mapping for inline saves
+const FUND_FIELD_MAP = {
+  vintage:        "vintage",
+  currency:       "currency",
+  finalSize:      "final_size",
+  targetSize:     "target_size",
+  hardCap:        "hard_cap",
+  raisedSize:     "raised_size",
+  raisedDate:     "raised_date",
+  netIrr:         "net_irr",
+  netMoic:        "net_moic",
+  grossIrr:       "gross_irr",
+  grossMoic:      "gross_moic",
+  dpi:            "dpi",
+  tvpi:           "tvpi",
+  rvpi:           "rvpi",
+  nav:            "nav",
+  undrawnValue:   "undrawn_value",
+  perfDate:       "perf_date",
+  icDate:         "ic_date",
+  nextMarket:     "next_market",
+  notes:          "notes",
+  owner:          "owner",
+  expectedAmount: "expected_amount",
+  score:          "rating_id",
+  impactFlag:     "impact_flag",
+};
+
 
 // ─── Segmented Date Input (DD / MM / YYYY with auto-advance) ─────────────────
 function DateSegmentInput({ defaultValue, onCommit, onCancel }) {
@@ -370,7 +398,7 @@ function PATagPicker({ attachedPA, placementAgents, onChange, onOpen }) {
   );
 }
 
-export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage, placementAgents = [], onPlacementAgentClick, provenanceRows = [], onAcceptProvenance, onRejectProvenance }) {
+export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, onSaveFund, onAddMeeting, onTagClick, onMeetingClick, zIndex = 1000, onEditingChange, owners = [], onGpClick, onPipelineStage, placementAgents = [], onPlacementAgentClick, provenanceRows = [], onAcceptProvenance, onRejectProvenance, onFieldCleared, meetingsRefreshKey = 0 }) {
   const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [fundraisingExpanded, setFundraisingExpanded] = useState(null); // null = auto
@@ -417,7 +445,20 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
       fund.netIrr, fund.netMoic, fund.grossIrr, fund.grossMoic,
       fund.dpi, fund.tvpi, fund.rvpi, fund.nav, fund.undrawnValue, fund.perfDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fundMeetings = (meetings || []).filter(m => m.fundId === fund.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+  // v2 funds: load meetings lazily from API (GP-level meetings aren't passed down for v2)
+  const [v2Meetings, setV2Meetings] = useState(null);
+  useEffect(() => {
+    if (!fund._v2) return;
+    let cancelled = false;
+    loadMeetings({ fund_id: fund.id })
+      .then(ms => { if (!cancelled) setV2Meetings(ms ?? []); })
+      .catch(() => { if (!cancelled) setV2Meetings([]); });
+    return () => { cancelled = true; };
+  }, [fund.id, fund._v2, meetingsRefreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fundMeetings = fund._v2
+    ? (v2Meetings ?? []).slice().sort((a, b) => new Date(b.date) - new Date(a.date))
+    : (meetings || []).filter(m => m.fundId === fund.id).sort((a, b) => new Date(b.date) - new Date(a.date));
   const meetingsWithNotes = fundMeetings.filter(m => m.notes?.trim());
   const raised = fund.raisedSize ? parseFloat(fund.raisedSize) : null;
   const target = fund.targetSize ? parseFloat(fund.targetSize) : null;
@@ -429,7 +470,30 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
   // Auto-reset expansion when status changes
   useEffect(() => { setFundraisingExpanded(null); }, [fund.status]);
 
-  const patch = (fields) => onSaveFund({ ...fund, ...fields });
+  const patch = (fields) => {
+    // Also carry snake_case counterparts so normalizeV2Fund doesn't revert
+    // cleared values on the next normalization pass (snake_case ?? camelCase priority)
+    const withSnake = { ...fields };
+    Object.entries(fields).forEach(([key, val]) => {
+      const apiField = FUND_FIELD_MAP[key];
+      if (apiField) {
+        // FK fields need code → lookup_item ID conversion
+        let apiVal = val ?? null;
+        if (apiField === "rating_id" && apiVal)
+          apiVal = `li_fund_rating_${apiVal.toLowerCase()}`;
+        if (apiField === "status_id" && apiVal)
+          apiVal = `li_fund_status_${apiVal.toLowerCase().replace(/[\s-]+/g, "_")}`;
+        patchFundField(fund.id, apiField, apiVal).catch(() => {});
+        withSnake[apiField] = apiVal;
+        if ((val ?? null) === null) onFieldCleared?.("fund", fund.id, apiField);
+      }
+    });
+    // Update lookup objects so normalizeV2Fund re-reads the new values without reload
+    const lookupUpdates = {};
+    if ("score" in fields) lookupUpdates.rating = fields.score ? { ...(fund.rating ?? {}), code: fields.score } : null;
+    if ("status" in fields) lookupUpdates.status = fields.status; // string form — normalizeV2Fund handles it
+    onSaveFund({ ...fund, ...withSnake, ...lookupUpdates });
+  };
   // v2 funds carry _pipelineStage lookup_item; old funds use the pipeline array
   const currentStage = fund._pipelineStage?.code ?? (pipeline).find(p => p.fundId === fund.id)?.stage ?? null;
 
@@ -498,21 +562,80 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
           </div>
         )}
       />
-      {/* Provenance banner — shown when Preqin suggestions pending for this fund */}
-      {provenanceRows.some(r => r.status === "pending") && (
-        <div style={{ padding: "0.75rem 1.5rem 0" }}>
-          <ProvenanceBanner rows={provenanceRows} />
-        </div>
-      )}
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 1.5rem" }}>
-        {[["overview", "Overview"], ["performance", "Performance"], ["history", `History${totalHistory > 0 ? ` (${totalHistory})` : ""}`], ["insights", `Insights${meetingsWithNotes.length ? ` (${meetingsWithNotes.length})` : ""}`]].map(([t, label]) => (
+        {[
+          ["overview", "Overview"],
+          ["performance", "Performance"],
+          ["history", `History${totalHistory > 0 ? ` (${totalHistory})` : ""}`],
+          ["insights", `Insights${meetingsWithNotes.length ? ` (${meetingsWithNotes.length})` : ""}`],
+          ["preqin", `Preqin${provenanceRows.filter(r => r.status === "pending").length ? ` (${provenanceRows.filter(r => r.status === "pending").length})` : ""}`],
+        ].map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)} style={{ background: "none", border: "none", cursor: "pointer", padding: "0.6rem 0.75rem", color: tab === t ? "var(--tx1)" : "var(--tx4)", fontWeight: tab === t ? 600 : 400, fontSize: "0.8rem", borderBottom: tab === t ? "2px solid var(--tx1)" : "2px solid transparent", marginBottom: "-1px", letterSpacing: "0.01em" }}>
             {label}
           </button>
         ))}
       </div>
       <div style={{ padding: "1.5rem" }}>
+        {tab === "preqin" && (() => {
+          const pending = provenanceRows.filter(r => r.status === "pending");
+          const accepted = provenanceRows.filter(r => r.status === "accepted");
+          return (
+            <div>
+              {pending.length === 0 && accepted.length === 0 && (
+                <div style={{ color: "var(--tx4)", fontSize: "0.875rem", textAlign: "center", padding: "2rem 0" }}>
+                  No Preqin suggestions for this fund. Run "Sync Preqin" on the Data Review page to fetch data.
+                </div>
+              )}
+              {pending.length > 0 && (
+                <div style={{ marginBottom: "1.5rem" }}>
+                  {sectionHeader("Pending Suggestions", "#f59e0b")}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                    {pending.map(row => (
+                      <div key={row.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.5rem 0.75rem", background: "var(--subtle)", borderRadius: "6px", border: "1px solid var(--border)" }}>
+                        <div style={{ flex: "0 0 140px", color: "var(--tx4)", fontSize: "0.72rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          {PROVENANCE_FIELD_LABELS[row.field_name] || row.field_name}
+                        </div>
+                        <div style={{ flex: 1, color: "#f59e0b", fontWeight: 600, fontSize: "0.875rem" }}>
+                          {row.value}
+                        </div>
+                        <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+                          <button
+                            onClick={() => onAcceptProvenance && onAcceptProvenance(row.id)}
+                            style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: "4px", padding: "0.2rem 0.6rem", fontSize: "0.72rem", cursor: "pointer", fontWeight: 600 }}>
+                            ✓ Accept
+                          </button>
+                          <button
+                            onClick={() => onRejectProvenance && onRejectProvenance(row.id)}
+                            style={{ background: "transparent", color: "var(--tx4)", border: "1px solid var(--border)", borderRadius: "4px", padding: "0.2rem 0.6rem", fontSize: "0.72rem", cursor: "pointer", fontWeight: 500 }}>
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {accepted.length > 0 && (
+                <div>
+                  {sectionHeader("Previously Accepted", "#22c55e")}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+                    {accepted.map(row => (
+                      <div key={row.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.4rem 0.75rem", fontSize: "0.8rem" }}>
+                        <div style={{ flex: "0 0 140px", color: "var(--tx5)", fontSize: "0.72rem" }}>
+                          {PROVENANCE_FIELD_LABELS[row.field_name] || row.field_name}
+                        </div>
+                        <div style={{ flex: 1, color: "var(--tx3)" }}>{row.value}</div>
+                        <div style={{ color: "#22c55e", fontSize: "0.68rem", fontWeight: 600 }}>✓ Accepted</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {tab === "insights" && (
           <div>
             {meetingsWithNotes.length === 0 ? (
@@ -537,8 +660,9 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
                 <span style={{ color: "var(--tx4)", fontSize: "0.72rem" }}>As of</span>
-                <InlineMetric id="perfDate" label="" value={fund.perfDate}
-                  displayValue={fmt(fund.perfDate)} placeholder="Set date"
+                <ProvenanceMetric id="perfDate" label="" value={fund.perfDate} fieldName="perf_date"
+                  displayValue={(v) => fmt(v)} placeholder="Set date"
+                  provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
                   onSave={v => patch({ perfDate: v || null })} />
               </div>
             </div>
@@ -547,21 +671,26 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
             <div style={{ marginBottom: "1.5rem" }}>
               {sectionHeader("Net Returns", "#22c55e")}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "0.75rem" }}>
-                <InlineMetric id="netIrr" label="Net IRR" value={fund.netIrr}
-                  displayValue={fund.netIrr ? `${parseFloat(fund.netIrr).toFixed(1)}%` : null}
-                  placeholder="—" onSave={v => patch({ netIrr: v || null })} />
-                <InlineMetric id="netMoic" label="Net MOIC" value={fund.netMoic}
-                  displayValue={fund.netMoic ? `${parseFloat(fund.netMoic).toFixed(2)}x` : null}
-                  placeholder="—" onSave={v => patch({ netMoic: v || null })} />
-                <InlineMetric id="dpi" label="DPI" value={fund.dpi}
-                  displayValue={fund.dpi ? `${parseFloat(fund.dpi).toFixed(2)}x` : null}
-                  placeholder="—" onSave={v => patch({ dpi: v || null })} />
-                <InlineMetric id="tvpi" label="TVPI" value={fund.tvpi}
-                  displayValue={fund.tvpi ? `${parseFloat(fund.tvpi).toFixed(2)}x` : null}
-                  placeholder="—" onSave={v => patch({ tvpi: v || null })} />
-                <InlineMetric id="rvpi" label="RVPI" value={fund.rvpi}
-                  displayValue={fund.rvpi ? `${parseFloat(fund.rvpi).toFixed(2)}x` : null}
-                  placeholder="—" onSave={v => patch({ rvpi: v || null })} />
+                <ProvenanceMetric id="netIrr" label="Net IRR" value={fund.netIrr} fieldName="net_irr"
+                  displayValue={(v) => v ? `${parseFloat(v).toFixed(1)}%` : null}
+                  placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                  onSave={v => patch({ netIrr: v || null })} />
+                <ProvenanceMetric id="netMoic" label="Net MOIC" value={fund.netMoic} fieldName="net_moic"
+                  displayValue={(v) => v ? `${parseFloat(v).toFixed(2)}x` : null}
+                  placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                  onSave={v => patch({ netMoic: v || null })} />
+                <ProvenanceMetric id="dpi" label="DPI" value={fund.dpi} fieldName="dpi"
+                  displayValue={(v) => v ? `${parseFloat(v).toFixed(2)}x` : null}
+                  placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                  onSave={v => patch({ dpi: v || null })} />
+                <ProvenanceMetric id="tvpi" label="TVPI" value={fund.tvpi} fieldName="tvpi"
+                  displayValue={(v) => v ? `${parseFloat(v).toFixed(2)}x` : null}
+                  placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                  onSave={v => patch({ tvpi: v || null })} />
+                <ProvenanceMetric id="rvpi" label="RVPI" value={fund.rvpi} fieldName="rvpi"
+                  displayValue={(v) => v ? `${parseFloat(v).toFixed(2)}x` : null}
+                  placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                  onSave={v => patch({ rvpi: v || null })} />
               </div>
             </div>
 
@@ -570,23 +699,27 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
               <div>
                 {sectionHeader("Gross Returns", "#60a5fa")}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-                  <InlineMetric id="grossIrr" label="Gross IRR" value={fund.grossIrr}
-                    displayValue={fund.grossIrr ? `${parseFloat(fund.grossIrr).toFixed(1)}%` : null}
-                    placeholder="—" onSave={v => patch({ grossIrr: v || null })} />
-                  <InlineMetric id="grossMoic" label="Gross MOIC" value={fund.grossMoic}
-                    displayValue={fund.grossMoic ? `${parseFloat(fund.grossMoic).toFixed(2)}x` : null}
-                    placeholder="—" onSave={v => patch({ grossMoic: v || null })} />
+                  <ProvenanceMetric id="grossIrr" label="Gross IRR" value={fund.grossIrr} fieldName="gross_irr"
+                    displayValue={(v) => v ? `${parseFloat(v).toFixed(1)}%` : null}
+                    placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                    onSave={v => patch({ grossIrr: v || null })} />
+                  <ProvenanceMetric id="grossMoic" label="Gross MOIC" value={fund.grossMoic} fieldName="gross_moic"
+                    displayValue={(v) => v ? `${parseFloat(v).toFixed(2)}x` : null}
+                    placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                    onSave={v => patch({ grossMoic: v || null })} />
                 </div>
               </div>
               <div>
                 {sectionHeader("Portfolio Valuation", "#a78bfa")}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-                  <InlineMetric id="nav" label="NAV (M)" value={fund.nav}
-                    displayValue={fmtM(fund.nav, fund.currency)}
-                    placeholder="—" onSave={v => patch({ nav: v || null })} />
-                  <InlineMetric id="undrawnValue" label="Undrawn (M)" value={fund.undrawnValue}
-                    displayValue={fmtM(fund.undrawnValue, fund.currency)}
-                    placeholder="—" onSave={v => patch({ undrawnValue: v || null })} />
+                  <ProvenanceMetric id="nav" label="NAV (M)" value={fund.nav} fieldName="nav"
+                    displayValue={(v) => fmtM(v, fund.currency)}
+                    placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                    onSave={v => patch({ nav: v || null })} />
+                  <ProvenanceMetric id="undrawnValue" label="Undrawn (M)" value={fund.undrawnValue} fieldName="undrawn_value"
+                    displayValue={(v) => fmtM(v, fund.currency)}
+                    placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+                    onSave={v => patch({ undrawnValue: v || null })} />
                 </div>
               </div>
             </div>
@@ -768,12 +901,17 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
         {/* Fund Details section */}
         {sectionHeader("Fund Details", "#64748b", <button onClick={() => setEditing(true)} style={{ ...btnGhost, padding: "0.1rem 0.45rem", fontSize: "0.65rem", color: "var(--tx5)" }}>Edit All</button>)}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "0.75rem", marginBottom: "0.75rem" }}>
-          <InlineMetric id="vintage" label="Vintage" value={fund.vintage} placeholder="2024" onSave={v => patch({ vintage: v })} />
-          <InlineMetric id="currency" label="Currency" value={fund.currency} placeholder="USD" onSave={v => patch({ currency: v })} />
-          <InlineMetric id="fundSize" label="Fund Size (M)"
+          <ProvenanceMetric id="vintage" label="Vintage" value={fund.vintage} fieldName="vintage"
+            placeholder="2024" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+            onSave={v => patch({ vintage: v })} />
+          <ProvenanceMetric id="currency" label="Currency" value={fund.currency} fieldName="currency"
+            placeholder="USD" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+            onSave={v => patch({ currency: v || null })} />
+          <ProvenanceMetric id="fundSize" label="Fund Size (M)" fieldName="target_size"
             value={fund.finalSize || fund.targetSize}
-            displayValue={fmtM(fund.finalSize || fund.targetSize, fund.currency)}
-            placeholder="—" onSave={v => patch({ finalSize: v })} />
+            displayValue={(v) => fmtM(v, fund.currency)}
+            placeholder="—" provenanceRows={provenanceRows} onAcceptProvenance={onAcceptProvenance}
+            onSave={v => patch({ finalSize: v })} />
           <DualMetric id="net-perf" label="Net Returns"
             val1={fund.netIrr}  disp1={fund.netIrr  ? `${parseFloat(fund.netIrr).toFixed(1)}%`  : null} ph1="Net IRR"
             val2={fund.netMoic} disp2={fund.netMoic ? `${parseFloat(fund.netMoic).toFixed(2)}x` : null} ph2="MOIC"
@@ -814,7 +952,8 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
             <div style={{ color: "var(--tx3)", fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Meetings ({fundMeetings.length})</div>
             <button onClick={() => onAddMeeting && onAddMeeting(fund.id)} style={{ ...btnGhost, fontSize: "0.75rem", color: "#60a5fa", borderColor: "#1d4ed8" }}>+ Log Meeting</button>
           </div>
-          {fundMeetings.length === 0 && <div style={{ color: "var(--tx4)", fontSize: "0.875rem", textAlign: "center", padding: "1rem" }}>No meetings logged for this fund yet.</div>}
+          {fund._v2 && v2Meetings === null && <div style={{ color: "var(--tx4)", fontSize: "0.875rem", textAlign: "center", padding: "1rem" }}>Loading…</div>}
+          {(fund._v2 ? v2Meetings !== null : true) && fundMeetings.length === 0 && <div style={{ color: "var(--tx4)", fontSize: "0.875rem", textAlign: "center", padding: "1rem" }}>No meetings logged for this fund yet.</div>}
           {fundMeetings.length > 0 && (
             <div style={{ border: "1px solid var(--border)", borderRadius: "6px", overflow: "hidden" }}>
               {fundMeetings.map((m, i) => (
@@ -824,7 +963,7 @@ export function FundDetailOverlay({ fund, gp, meetings, pipeline = [], onClose, 
                   onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                   <span style={{ color: "var(--tx4)", flexShrink: 0, minWidth: "68px", fontSize: "0.72rem" }}>{fmt(m.date)}</span>
                   <span style={{ color: "var(--tx1)", fontWeight: 500, flex: "1 1 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.775rem" }}>{m.topic || "—"}</span>
-                  <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>{m.type}</span>
+                  <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem" }}>{m.type?.label ?? m.type}</span>
                   {m.location && <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem", maxWidth: "90px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.location}</span>}
                   {m.attendeesUs?.length > 0 && <span style={{ color: "var(--tx5)", flexShrink: 0, fontSize: "0.7rem", maxWidth: "100px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.attendeesUs.join(", ")}</span>}
                 </div>

@@ -44,3 +44,12 @@ export const SHORTCUTS = [
   { key: "F5", label: "Pipeline",   view: "pipeline" },
   { key: "F6", label: "Dashboard",  view: "dashboard" },
 ];
+
+// Maps MeetingForm type labels to lookup IDs stored in the DB.
+export const MEETING_TYPE_ID = {
+  "Virtual":     "li_meeting_virtual",
+  "In-Person":   "li_meeting_in_person",
+  "Phone Call":  "li_meeting_phone",
+  "Phone":       "li_meeting_phone",
+  "Conference":  "li_meeting_conference",
+};

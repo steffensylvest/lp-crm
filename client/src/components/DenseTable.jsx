@@ -3,6 +3,7 @@ import { PIPELINE_STAGES } from '../constants.js';
 import { fmt, fmtM } from '../utils.js';
 import { ScoreBadge, StatusPill } from './Badges.jsx';
 import { ScorePicker, StatusPicker, OwnerPicker, StagePicker } from './Pickers.jsx';
+import { patchOrganizationField } from '../api.js';
 
 const COL = {
   name:     { label: "Name",         w: "auto",   align: "left"  },
@@ -233,7 +234,10 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                         {/* Owner — picker in edit mode, badge otherwise */}
                         <div onClick={e => e.stopPropagation()} style={{ flexShrink: 0 }}>
                           {editMode && onUpdateGP ? (
-                            <OwnerPicker owner={gp.owner} owners={owners} onChange={v => onUpdateGP({ ...gp, owner: v })} />
+                            <OwnerPicker owner={gp.owner} owners={owners} onChange={async v => {
+                              onUpdateGP({ ...gp, owner: v });
+                              await patchOrganizationField(gp.id, "owner", v || null, null, "Me").catch(console.error);
+                            }} />
                           ) : gp.owner ? (
                             <span style={{ background: "var(--subtle)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontSize: "0.62rem", color: "var(--tx4)", maxWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>
                               {gp.owner}
@@ -251,7 +255,12 @@ export function DenseTable({ filtered, allGps, pipeline = [], onGpClick, onFundC
                     <td style={{ ...tdBase, textAlign: "center", background: gpFocused ? "var(--subtle)" : "" }}
                       onClick={e => e.stopPropagation()}>
                       {editMode && onUpdateGP
-                        ? <ScorePicker score={gp.score} onChange={v => onUpdateGP({ ...gp, score: v })} />
+                        ? <ScorePicker score={gp.rating?.code ?? gp.score} onChange={async v => {
+                            const ratingId = v ? `li_gp_rating_${v.toLowerCase()}` : null;
+                            const updatedRating = ratingId ? { ...(gp.rating ?? {}), id: ratingId, code: v } : null;
+                            onUpdateGP({ ...gp, rating_id: ratingId, rating: updatedRating, score: v });
+                            await patchOrganizationField(gp.id, "rating_id", ratingId, null, "Me").catch(console.error);
+                          }} />
                         : <ScoreBadge score={gp.score} />}
                     </td>
                     {/* Status — show fund count */}

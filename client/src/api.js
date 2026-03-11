@@ -24,6 +24,9 @@ export const loadOrganizations = (params = {}) => {
 
 export const loadOrganization = (id) => _v2fetch(`/organizations/${id}`);
 
+export const createOrganization = (data) =>
+  _v2fetch('/organizations', { method: 'POST', body: JSON.stringify(data) });
+
 export const saveOrganization = (id, data) =>
   _v2fetch(`/organizations/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
@@ -41,6 +44,9 @@ export const loadFunds = (params = {}) => {
 };
 
 export const loadFund = (id) => _v2fetch(`/funds/${id}`);
+
+export const createFund = (data) =>
+  _v2fetch('/funds', { method: 'POST', body: JSON.stringify(data) });
 
 export const saveFund = (id, data) =>
   _v2fetch(`/funds/${id}`, { method: 'PUT', body: JSON.stringify(data) });
@@ -100,6 +106,21 @@ export const savePerson = (data) =>
 export const updatePerson = (id, data) =>
   _v2fetch(`/people/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
+export const findOrCreatePerson = (data) =>
+  _v2fetch('/people/find-or-create', { method: 'POST', body: JSON.stringify(data) });
+
+export const getDuplicatePeople = () =>
+  _v2fetch('/people/duplicates');
+
+export const mergePeople = (keepId, mergeIds) =>
+  _v2fetch('/people/merge', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds }) });
+
+export const getDuplicateFunds = () =>
+  _v2fetch('/funds/duplicates');
+
+export const mergeFunds = (keepId, mergeIds) =>
+  _v2fetch('/funds/merge', { method: 'POST', body: JSON.stringify({ keep_id: keepId, merge_ids: mergeIds }) });
+
 // ── Audit ──────────────────────────────────────────────────────────────────────
 
 export const loadAuditLog = (entityType, entityId) =>
@@ -121,11 +142,26 @@ export const deleteTask = (id) =>
 
 // ── External / Preqin ─────────────────────────────────────────────────────────
 
-export const searchPreqin = (q) =>
-  _v2fetch(`/external/preqin/search?q=${encodeURIComponent(q)}`);
+export const searchPreqin = (q, firmId) => {
+  const params = new URLSearchParams({ q });
+  if (firmId) params.set('firm_id', firmId);
+  return _v2fetch(`/external/preqin/search?${params.toString()}`);
+};
+
+export const searchPreqinManagers = (q) =>
+  _v2fetch(`/external/preqin/managers?q=${encodeURIComponent(q)}`);
+
+export const loadPreqinSeries = (seriesId) =>
+  _v2fetch(`/external/preqin/series/${encodeURIComponent(seriesId)}`);
 
 export const triggerPreqinSync = () =>
   _v2fetch('/external/sync', { method: 'POST' });
+
+export const triggerPreqinPerformanceSync = () =>
+  _v2fetch('/external/sync/performance', { method: 'POST' });
+
+export const triggerPreqinManagersSync = () =>
+  _v2fetch('/external/sync/managers', { method: 'POST' });
 
 export const loadPendingProvenance = () => _v2fetch('/external/pending');
 
@@ -140,3 +176,31 @@ export const rejectProvenance = (id, rejectedBy) =>
     method: 'PATCH',
     body: JSON.stringify({ rejected_by: rejectedBy }),
   });
+
+// ── SQL Explorer ────────────────────────────────────────────────────────────────
+
+export const sqlTables = (db) => _v2fetch(`/sql/tables?db=${db}`);
+
+export const sqlQuery = (db, sql) =>
+  _v2fetch('/sql/query', { method: 'POST', body: JSON.stringify({ db, sql }) });
+
+// ── Preqin link suggestions ─────────────────────────────────────────────────────
+
+export const loadPreqinLinkSuggestions = () =>
+  _v2fetch('/external/preqin/link-suggestions');
+
+export const ignorePreqinLinkSuggestion = (fundId, preqinFundId) =>
+  _v2fetch('/external/preqin/link-suggestions/ignore', {
+    method: 'POST',
+    body: JSON.stringify({ fund_id: fundId, preqin_fund_id: preqinFundId }),
+  });
+
+export const loadIgnoredPreqinSuggestions = () =>
+  _v2fetch('/external/preqin/link-suggestions/ignored');
+
+export const unignorePreqinLinkSuggestion = (fundId, preqinFundId) =>
+  _v2fetch(
+    `/external/preqin/link-suggestions/ignore?fund_id=${encodeURIComponent(fundId)}&preqin_fund_id=${encodeURIComponent(preqinFundId)}`,
+    { method: 'DELETE' },
+  );
+

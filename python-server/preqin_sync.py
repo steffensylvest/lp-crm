@@ -1,7 +1,12 @@
 """
-preqin_sync.py — Sync data from external/preqin.db into field_provenance.
+preqin_sync.py — Sync data from external Preqin DBs into field_provenance.
 
-Matches Preqin rows to our entities via:
+Three sources supported:
+  - preqin_funds.db       → fund fields + org fields (via es_preqin)
+  - preqin_performance.db → fund performance metrics (via es_preqin_performance)
+  - Preqin_managers.db    → org/firm fields (via es_preqin_managers)
+
+Matches rows to our entities via:
   - fund.preqin_fund_id   ← "FUND ID"
   - fund.preqin_series_id ← "FUND SERIES ID"
   - org.preqin_manager_id ← "FIRM ID"
@@ -10,7 +15,7 @@ Only creates / updates rows with status='pending'.
 Never touches 'accepted' or 'rejected' rows — those are user decisions.
 
 Safe to call multiple times — fully idempotent.
-Works silently if external/preqin.db is missing (returns error message, no crash).
+Works silently if a DB file is missing (returns error message, no crash).
 """
 
 import os
@@ -27,6 +32,8 @@ from models import (
 )
 
 PREQIN_SOURCE_ID      = "es_preqin"
+PREQIN_PERF_SOURCE_ID = "es_preqin_performance"
+PREQIN_MGR_SOURCE_ID  = "es_preqin_managers"
 PREQIN_DATA_SOURCE_ID = "ds_preqin"
 MATCH_FIELDS          = {"preqin_fund_id", "preqin_series_id", "preqin_manager_id"}
 
@@ -56,51 +63,59 @@ def _transform(raw, transform: Optional[str]) -> Optional[str]:
             return None
 
     if transform == "to_date":
-        for fmt in ("%d %b %Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%b %Y"):
+        # Strip time component if present (e.g. "2025-06-30 00:00:00" → "2025-06-30")
+        s = s.split(" ")[0]
+        for fmt in ("%Y-%m-%d", "%d %b %Y", "%m/%d/%Y", "%d/%m/%Y", "%b %Y"):
             try:
                 return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
             except ValueError:
                 continue
         return s  # pass through as-is if format unrecognised
 
+    if transform == "div100":
+        # Convert Preqin %-of-paid-in values to multiples (45.6 → 0.456)
+        try:
+            return str(round(float(s) / 100, 6))
+        except (ValueError, TypeError):
+            return None
+
     return s  # "to_str" and default
 
 
-# ── Main sync function ────────────────────────────────────────────────────────
+# ── Shared sync engine ────────────────────────────────────────────────────────
 
-def sync_preqin(db: Session) -> Dict:
+def _sync_source(
+    db: Session,
+    source_id: str,
+    match_funds: bool = True,
+    match_orgs: bool = True,
+) -> Dict:
     """
-    Full sync: Preqin_Export → field_provenance.
-    Returns a summary dict. Never raises — errors are captured in the return value.
+    Generic sync engine: reads one ExternalSource DB and upserts field_provenance rows.
+    Returns a summary dict. Never raises — errors captured in return value.
+
+    match_funds: whether to resolve rows via fund preqin IDs
+    match_orgs:  whether to resolve rows via org preqin_manager_id
     """
     # ── Validate setup ────────────────────────────────────────────────────────
-    ext = db.query(ExternalSource).filter(ExternalSource.id == PREQIN_SOURCE_ID).first()
+    ext = db.query(ExternalSource).filter(ExternalSource.id == source_id).first()
     if not ext:
-        return {
-            "ok": False,
-            "error": "Preqin external_source not found. Run seed_v2.py first.",
-        }
+        return {"ok": False, "error": f"ExternalSource '{source_id}' not found. Run seed_v2.py first."}
 
-    db_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), ext.file_path
-    )
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ext.file_path)
     if not os.path.exists(db_path):
         return {
             "ok": False,
-            "error": f"Preqin DB not found at '{ext.file_path}'. "
-                     "Place the file there and retry. App works normally without it.",
+            "error": f"DB not found at '{ext.file_path}'. Place the file there and retry.",
         }
 
     column_maps = (
         db.query(ExternalColumnMap)
-        .filter(
-            ExternalColumnMap.source_id == PREQIN_SOURCE_ID,
-            ExternalColumnMap.is_active == True,  # noqa: E712
-        )
+        .filter(ExternalColumnMap.source_id == source_id, ExternalColumnMap.is_active == True)  # noqa: E712
         .all()
     )
     if not column_maps:
-        return {"ok": False, "error": "No active column maps found. Run seed_v2.py first."}
+        return {"ok": False, "error": f"No active column maps for '{source_id}'. Run seed_v2.py first."}
 
     # Build: external_column → [(entity_type, field_name, transform), ...]
     col_map: Dict[str, list] = {}
@@ -112,18 +127,20 @@ def sync_preqin(db: Session) -> Dict:
     # ── Index our entities by Preqin ID ───────────────────────────────────────
     funds_by_fund_id: Dict[str, FundV2]   = {}
     funds_by_series_id: Dict[str, FundV2] = {}
-    for fund in db.query(FundV2).filter(FundV2.deleted_at == None).all():  # noqa: E711
-        if fund.preqin_fund_id:
-            funds_by_fund_id[str(fund.preqin_fund_id).strip()] = fund
-        if fund.preqin_series_id:
-            funds_by_series_id[str(fund.preqin_series_id).strip()] = fund
+    if match_funds:
+        for fund in db.query(FundV2).filter(FundV2.deleted_at == None).all():  # noqa: E711
+            if fund.preqin_fund_id:
+                funds_by_fund_id[str(fund.preqin_fund_id).strip()] = fund
+            if fund.preqin_series_id:
+                funds_by_series_id[str(fund.preqin_series_id).strip()] = fund
 
     orgs_by_manager_id: Dict[str, Organization] = {}
-    for org in db.query(Organization).filter(Organization.deleted_at == None).all():  # noqa: E711
-        if org.preqin_manager_id:
-            orgs_by_manager_id[str(org.preqin_manager_id).strip()] = org
+    if match_orgs:
+        for org in db.query(Organization).filter(Organization.deleted_at == None).all():  # noqa: E711
+            if org.preqin_manager_id:
+                orgs_by_manager_id[str(org.preqin_manager_id).strip()] = org
 
-    # ── Read Preqin DB ────────────────────────────────────────────────────────
+    # ── Read external DB ──────────────────────────────────────────────────────
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -132,33 +149,29 @@ def sync_preqin(db: Session) -> Dict:
         rows = cur.fetchall()
         conn.close()
     except Exception as exc:
-        return {"ok": False, "error": f"Failed to read Preqin DB: {exc}"}
+        return {"ok": False, "error": f"Failed to read DB at '{ext.file_path}': {exc}"}
 
     counters = {
-        "rows_read":           len(rows),
-        "rows_matched_fund":   0,
-        "rows_matched_org":    0,
-        "rows_unmatched":      0,
-        "provenance_created":  0,
-        "provenance_updated":  0,
-        "provenance_skipped":  0,
-        "warnings":            [],
+        "rows_read":          len(rows),
+        "rows_matched_fund":  0,
+        "rows_matched_org":   0,
+        "rows_unmatched":     0,
+        "provenance_created": 0,
+        "provenance_updated": 0,
+        "provenance_skipped": 0,
+        "warnings":           [],
     }
 
-    # ── Pre-load existing pending provenance rows into memory for fast lookup
+    # ── Pre-load existing provenance rows for fast lookup ─────────────────────
     # Key: (entity_type, entity_id, field_name, source_id)
     existing_prov: Dict[tuple, FieldProvenance] = {}
-    for fp in (
-        db.query(FieldProvenance)
-        .filter(FieldProvenance.source_id == PREQIN_DATA_SOURCE_ID)
-        .all()
-    ):
+    for fp in db.query(FieldProvenance).filter(FieldProvenance.source_id == PREQIN_DATA_SOURCE_ID).all():
         key = (fp.entity_type, fp.entity_id, fp.field_name, fp.source_id)
         existing_prov[key] = fp
 
     now = _now()
 
-    # ── Process each Preqin row ────────────────────────────────────────────────
+    # ── Process each row ──────────────────────────────────────────────────────
     for row in rows:
         row_dict = dict(row)
 
@@ -167,10 +180,10 @@ def sync_preqin(db: Session) -> Dict:
         raw_firm_id   = str(row_dict.get("FIRM ID",        "") or "").strip()
 
         matched_fund = (
-            funds_by_fund_id.get(raw_fund_id) or
-            funds_by_series_id.get(raw_series_id)
+            (funds_by_fund_id.get(raw_fund_id) or funds_by_series_id.get(raw_series_id))
+            if match_funds else None
         )
-        matched_org = orgs_by_manager_id.get(raw_firm_id)
+        matched_org = orgs_by_manager_id.get(raw_firm_id) if match_orgs else None
 
         if not matched_fund and not matched_org:
             counters["rows_unmatched"] += 1
@@ -187,15 +200,11 @@ def sync_preqin(db: Session) -> Dict:
 
             for entity_type, field_name, transform in mappings:
                 if field_name in MATCH_FIELDS:
-                    continue  # matching fields are not suggestions
+                    continue  # matching keys are never suggestions
 
-                if entity_type == "fund":
-                    entity = matched_fund
-                elif entity_type == "organization":
-                    entity = matched_org
-                else:
-                    continue
-
+                entity = matched_fund if entity_type == "fund" else (
+                    matched_org if entity_type == "organization" else None
+                )
                 if not entity:
                     continue
 
@@ -213,12 +222,10 @@ def sync_preqin(db: Session) -> Dict:
                     if fp.value == transformed:
                         counters["provenance_skipped"] += 1
                         continue
-                    # Pending row exists but value changed — update it
                     fp.value = transformed
                     fp.proposed_at = now
                     counters["provenance_updated"] += 1
                 else:
-                    # New suggestion
                     fp = FieldProvenance(
                         id=_uid(),
                         entity_type=entity_type,
@@ -231,18 +238,29 @@ def sync_preqin(db: Session) -> Dict:
                         proposed_at=now,
                     )
                     db.add(fp)
-                    existing_prov[key] = fp   # prevent double-insert within batch
+                    existing_prov[key] = fp
                     counters["provenance_created"] += 1
 
-    # ── Finalise ──────────────────────────────────────────────────────────────
     ext.last_synced = now
     db.commit()
+    return {"ok": True, "synced_at": now, **counters}
 
-    return {
-        "ok":        True,
-        "synced_at": now,
-        **counters,
-    }
+
+# ── Public sync functions ─────────────────────────────────────────────────────
+
+def sync_preqin(db: Session) -> Dict:
+    """Sync fund + org fields from preqin_funds.db."""
+    return _sync_source(db, PREQIN_SOURCE_ID, match_funds=True, match_orgs=True)
+
+
+def sync_preqin_performance(db: Session) -> Dict:
+    """Sync fund performance metrics from preqin_performance.db."""
+    return _sync_source(db, PREQIN_PERF_SOURCE_ID, match_funds=True, match_orgs=False)
+
+
+def sync_preqin_managers(db: Session) -> Dict:
+    """Sync org/firm fields from Preqin_managers.db."""
+    return _sync_source(db, PREQIN_MGR_SOURCE_ID, match_funds=False, match_orgs=True)
 
 
 # ── Pending provenance query ──────────────────────────────────────────────────

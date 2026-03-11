@@ -45,6 +45,40 @@ def get_db():
         db.close()
 
 
+def _make_meeting_attendee_person_nullable() -> None:
+    """Make meeting_attendee.person_id nullable (SQLite requires table recreation)."""
+    with engine.connect() as conn:
+        # Check if the column is already nullable by checking table info
+        rows = conn.execute(text("PRAGMA table_info(meeting_attendee)")).fetchall()
+        for row in rows:
+            # row: (cid, name, type, notnull, dflt_value, pk)
+            if row[1] == "person_id" and row[3] == 0:
+                return  # already nullable, nothing to do
+        # Recreate with person_id nullable
+        try:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS meeting_attendee_new (
+                    id         VARCHAR(50) NOT NULL PRIMARY KEY,
+                    meeting_id VARCHAR(50) NOT NULL REFERENCES meeting(id) ON DELETE CASCADE,
+                    person_id  VARCHAR(50) REFERENCES person(id),
+                    org_id     VARCHAR(50) REFERENCES organization(id),
+                    side       VARCHAR(50)
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO meeting_attendee_new SELECT id, meeting_id, person_id, org_id, side
+                FROM meeting_attendee
+            """))
+            conn.execute(text("DROP TABLE meeting_attendee"))
+            conn.execute(text("ALTER TABLE meeting_attendee_new RENAME TO meeting_attendee"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+            conn.commit()
+            print("[db] meeting_attendee.person_id made nullable.")
+        except Exception as e:
+            print(f"[db] meeting_attendee migration skipped: {e}")
+
+
 def _migrate_columns() -> None:
     """Add new columns to existing tables. Each ALTER is idempotent (errors ignored)."""
     statements = [
@@ -57,6 +91,8 @@ def _migrate_columns() -> None:
         "ALTER TABLE CRM_meetings ADD COLUMN attendees_us TEXT",
         "ALTER TABLE CRM_funds ADD COLUMN placement_agent_id VARCHAR(50)",
     ]
+    # SQLite does not support ALTER COLUMN — recreate meeting_attendee with person_id nullable
+    _make_meeting_attendee_person_nullable()
     with engine.connect() as conn:
         for sql in statements:
             try:

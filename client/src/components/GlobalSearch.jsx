@@ -6,32 +6,33 @@ const TYPE_STYLES = {
   fund:    { label: "Fund",    color: "#a78bfa", bg: "#2e1a5f" },
   meeting: { label: "Meeting", color: "#fbbf24", bg: "#3d2f00" },
   pa:      { label: "Agent",   color: "#34d399", bg: "#064e3b" },
+  person:  { label: "Person",  color: "#f472b6", bg: "#4a1230" },
 };
 
-export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, onFundClick, onMeetingClick, onPaClick, query, onQueryChange, zIndex = 3000, active = true }) {
+export function GlobalSearch({ gps, placementAgents = [], persons = [], onClose, onGpClick, onFundClick, onMeetingClick, onPaClick, onPersonClick, query, onQueryChange, zIndex = 3000, active = true }) {
   const [focusIdx, setFocusIdx] = useState(0);
   const inputRef = useRef();
 
   useEffect(() => { setTimeout(() => inputRef.current?.focus(), 0); }, []);
   useEffect(() => { if (active) setTimeout(() => inputRef.current?.focus(), 0); }, [active]);
 
-  // Build results — GPs first, then funds, then meetings, cap at 10 total
+  // Build results — GPs first, then funds, then meetings, then PAs, then persons — cap at 12 total
   const results = [];
   if (query.trim().length >= 1) {
     const q = query.toLowerCase();
     for (const gp of gps) {
-      if (results.length >= 10) break;
-      if ([gp.name, gp.hq, gp.contact, gp.notes].some(v => v?.toLowerCase().includes(q))) {
+      if (results.length >= 12) break;
+      if ([gp.name, gp.hq, gp.contact, gp.notes, gp.notes_text, gp.city, gp.country].some(v => v?.toLowerCase().includes(q))) {
         results.push({
           type: "gp", id: `gp-${gp.id}`,
           label: gp.name,
-          sub: [gp.hq, gp.score ? `Score ${gp.score}` : null].filter(Boolean).join(" · "),
+          sub: [gp.hq ?? gp.city, gp.score ? `Score ${gp.score}` : null].filter(Boolean).join(" · "),
           action: () => { inputRef.current?.blur(); onGpClick(gp); },
         });
       }
       for (const f of gp.funds || []) {
-        if (results.length >= 10) break;
-        if ([f.name, f.strategy, f.subStrategy, f.status, f.notes, ...(f.sectors || [])].some(v => v?.toLowerCase().includes(q))) {
+        if (results.length >= 12) break;
+        if ([f.name, f.strategy, f.subStrategy, f.status, f.notes, f.notes_text, ...(f.sectors || [])].some(v => v?.toLowerCase().includes(q))) {
           results.push({
             type: "fund", id: `fund-${f.id}`,
             label: f.name,
@@ -41,7 +42,7 @@ export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, on
         }
       }
       for (const m of gp.meetings || []) {
-        if (results.length >= 10) break;
+        if (results.length >= 12) break;
         if ([m.topic, m.notes, m.location].some(v => v?.toLowerCase().includes(q))) {
           const fundName = m.fundId ? (gp.funds || []).find(f => f.id === m.fundId)?.name : null;
           results.push({
@@ -54,13 +55,25 @@ export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, on
       }
     }
     for (const pa of placementAgents) {
-      if (results.length >= 10) break;
-      if ([pa.name, pa.hq, pa.contact, pa.contactEmail].some(v => v?.toLowerCase().includes(q))) {
+      if (results.length >= 12) break;
+      if ([pa.name, pa.hq, pa.contact, pa.contactEmail, pa.city, pa.country].some(v => v?.toLowerCase().includes(q))) {
         results.push({
           type: "pa", id: `pa-${pa.id}`,
           label: pa.name,
-          sub: [pa.hq, pa.contact, pa.contactEmail].filter(Boolean).join(" · "),
+          sub: [pa.hq ?? pa.city, pa.contact].filter(Boolean).join(" · "),
           action: () => { inputRef.current?.blur(); onPaClick?.(pa); },
+        });
+      }
+    }
+    for (const p of persons) {
+      if (results.length >= 12) break;
+      const fullName = [p.first_name, p.last_name].filter(Boolean).join(" ");
+      if ([fullName, p.title, p.email, p.org_name].some(v => v?.toLowerCase().includes(q))) {
+        results.push({
+          type: "person", id: `person-${p.id}`,
+          label: fullName || p.email || "(no name)",
+          sub: [p.title, p.org_name].filter(Boolean).join(" · "),
+          action: () => { inputRef.current?.blur(); onPersonClick?.(p); },
         });
       }
     }
@@ -92,7 +105,7 @@ export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, on
             value={query}
             onChange={e => onQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search GPs, funds, meetings, agents…"
+            placeholder="Search GPs, funds, meetings, agents, people…"
             style={{ flex: 1, fontSize: "1rem", background: "none", border: "none", color: "var(--tx1)", outline: "none" }}
           />
           <kbd onClick={onClose}
@@ -125,7 +138,7 @@ export function GlobalSearch({ gps, placementAgents = [], onClose, onGpClick, on
         ) : query.length > 0 ? (
           <div style={{ padding: "2.5rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.85rem" }}>No results for "{query}"</div>
         ) : (
-          <div style={{ padding: "1.75rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.82rem" }}>Type to search across all GPs, funds, meetings and agents</div>
+          <div style={{ padding: "1.75rem", textAlign: "center", color: "var(--tx5)", fontSize: "0.82rem" }}>Type to search across all GPs, funds, meetings, agents and people</div>
         )}
 
         {/* Footer hint */}

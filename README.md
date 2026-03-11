@@ -7,7 +7,7 @@ A private-equity LP relationship management tool for tracking GPs, funds, meetin
 ## Features
 
 - **GP & Fund tracking** — rating, status, pipeline stage, fundraising metrics, performance returns, sectors, responsible team member
-- **Pipeline board** — drag-and-drop kanban across six stages (Watching → First Look → Diligence → IC Review → Committed → Passed)
+- **Pipeline view** — flat fund table with 26 sortable/filterable columns; drag-and-drop kanban board also available
 - **People directory** — contacts linked to organizations with role and email
 - **Meeting log** — log calls and meetings, link to fund or GP-level, track attendees and notes
 - **Fundraising timeline** — interactive marker chart for launch / close dates with progress bar
@@ -116,7 +116,7 @@ lp-crm/
 │
 ├── python-server/           FastAPI backend
 │   ├── main.py              Route definitions — includes routes_v2 router
-│   ├── models_v2.py         SQLAlchemy ORM: 20 tables (organization, fund, meeting, etc.)
+│   ├── models.py            SQLAlchemy ORM: 20 tables (organization, fund, meeting, etc.)
 │   ├── crud.py              CRUD functions + serializers for all v2 entities
 │   ├── routes_v2.py         /api/v2/* router (~40 endpoints)
 │   ├── database.py          Engine setup, reads DATABASE_URL from .env
@@ -127,7 +127,7 @@ lp-crm/
 │   ├── .env.example         DATABASE_URL template
 │   ├── lp_crm_seed.db       Seed database with dummy data (safe to commit)
 │   └── external/
-│       └── preqin.db        Preqin export (not committed — place manually)
+│       └── preqin_funds.db        Preqin export (not committed — place manually)
 │
 └── docs/
     ├── ARCHITECTURE.md      Full file map, API endpoints, component props
@@ -164,7 +164,13 @@ All v2 endpoints are under `/api/v2/`.
 | GET | `/api/v2/audit` | Change log (filter by entity_type, entity_id) |
 | GET/POST | `/api/v2/tasks` | List or create tasks |
 | PUT/DELETE | `/api/v2/tasks/{id}` | Update or delete task |
-| GET | `/api/v2/external/preqin/search?q=` | Search Preqin external DB |
+| GET | `/api/v2/external/preqin/search?q=` | Search Preqin DB (`firm_id` param filters to one manager) |
+| GET | `/api/v2/external/preqin/managers?q=` | Search Preqin manager names |
+| GET | `/api/v2/external/preqin/series/{id}` | All funds in a Preqin series |
+| GET | `/api/v2/external/preqin/link-suggestions` | Funds with potential Preqin matches |
+| POST | `/api/v2/external/sync` | Trigger Preqin data sync |
+| GET | `/api/v2/external/pending` | Pending provenance items awaiting review |
+| PATCH | `/api/v2/external/provenance/{id}/accept\|reject` | Accept or reject a Preqin suggestion |
 
 **PATCH** any fund or org field: `PATCH /api/v2/funds/{id}` with body `{ "field": "rating_id", "value": "li_fund_rating_a", "note": "...", "changed_by": "..." }` — auto-writes to audit_log.
 
@@ -174,7 +180,7 @@ All v2 endpoints are under `/api/v2/`.
 
 SQLite by default. The schema is created automatically on startup via `Base.metadata.create_all()`. See [`docs/DATA-MODEL.md`](docs/DATA-MODEL.md) for the full SQL DDL and entity relationships.
 
-The database has 20 tables: `organization`, `fund`, `fund_sector`, `fund_strategy`, `org_person`, `person`, `meeting`, `meeting_attendee`, `note`, `task`, `taxonomy_item`, `lookup_category`, `lookup_item`, `audit_log`, `performance_snapshot`, plus legacy `CRM_*` tables kept for reference.
+The database has 20 tables: `organization`, `fund`, `fund_sector`, `fund_strategy`, `org_person`, `person`, `meeting`, `meeting_attendee`, `note`, `task`, `taxonomy_item`, `lookup_category`, `lookup_item`, `audit_log`, `performance_snapshot`, `entity_taxonomy`, `field_provenance`, `data_source`, `lookup_category`, `lookup_item`.
 
 ### Switching to Snowflake
 
@@ -191,7 +197,7 @@ The database has 20 tables: `organization`, `fund`, `fund_sector`, `fund_strateg
 
 - **No auto-save** — changes are saved immediately on each field edit via individual PATCH calls
 - **Audit history** — every PATCH call writes to `audit_log`; rating, status, and pipeline stage changes are always tracked
-- **Preqin linking** — funds can be linked to a Preqin fund ID via the Edit form; requires `external/preqin.db` to be present
+- **Preqin linking** — funds can be linked to a Preqin fund ID via the Edit form; requires `external/preqin_funds.db` to be present
 - **Keyboard shortcuts** — `Esc` closes overlays, `/` focuses global search, `F1`–`F5` switch views
 - **No external state library** — all state lives in `App.jsx`, passed down as props; `SettingsContext` provides theme
 

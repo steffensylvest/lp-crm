@@ -293,6 +293,8 @@ class FundV2(Base):
     preqin_fund_id   = Column(String(100))   # Preqin "Fund ID"
     preqin_series_id = Column(String(100))   # Preqin "Fund Series ID"
 
+    impact_flag = Column(Boolean, default=False)   # ESG/Impact strategy flag
+
     deleted_at = Column(String(50))   # soft delete — NULL = active
 
     org                  = relationship("Organization",  back_populates="funds",            foreign_keys=[org_id])
@@ -487,7 +489,7 @@ class MeetingAttendee(Base):
 
     id         = Column(String(50), primary_key=True)
     meeting_id = Column(String(50), ForeignKey("meeting.id",       ondelete="CASCADE"), nullable=False)
-    person_id  = Column(String(50), ForeignKey("person.id"),        nullable=False)
+    person_id  = Column(String(50), ForeignKey("person.id"),        nullable=True)
     org_id     = Column(String(50), ForeignKey("organization.id"),  nullable=True)
     side       = Column(String(50))   # us | them | placement_agent | other
 
@@ -542,7 +544,7 @@ class ExternalSource(Base):
 
     id          = Column(String(50),  primary_key=True)
     name        = Column(String(100), nullable=False)   # e.g. "preqin"
-    file_path   = Column(String(500))    # relative to python-server/: "external/preqin.db"
+    file_path   = Column(String(500))    # relative to python-server/: "external/preqin_funds.db"
     description = Column(Text)
     last_synced = Column(String(50))     # ISO timestamp of last successful sync
 
@@ -569,3 +571,16 @@ class ExternalColumnMap(Base):
     notes           = Column(Text)           # e.g. "Renamed from X in Mar 2026 export"
 
     source = relationship("ExternalSource", back_populates="column_maps")
+
+
+class PreqinLinkIgnore(Base):
+    """
+    Stores fund→Preqin pairs that the user has chosen to ignore.
+    Ensures the same suggestion is never surfaced again.
+    """
+    __tablename__ = "preqin_link_ignore"
+
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    fund_id        = Column(String(50), nullable=False)
+    preqin_fund_id = Column(String(100), nullable=False)
+    ignored_at     = Column(String(50))   # ISO timestamp

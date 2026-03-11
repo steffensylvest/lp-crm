@@ -1,5 +1,6 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useSettings } from "../settingsContext.js";
+import { sqlTables, sqlQuery } from "../api.js";
 import {
   SCORE_CONFIG, SECTOR_OPTIONS, STRATEGY_OPTIONS, SUB_STRATEGY_PRESETS,
   STATUS_OPTIONS, PIPELINE_STAGES,
@@ -62,6 +63,168 @@ function ColorField({ label, darkVal, lightVal, onChangeDark, onChangeLight }) {
         <input type="color" value={lightVal || "#000000"} onChange={e => onChangeLight(e.target.value)} style={fi} title="Light mode colour" />
         <input value={lightVal || ""} onChange={e => onChangeLight(e.target.value)} style={{ ...IS, width: "80px", fontSize: "0.75rem", padding: "0.25rem 0.4rem", fontFamily: "monospace" }} placeholder="#hex" />
       </div>
+    </div>
+  );
+}
+
+// ─── SQL Explorer ──────────────────────────────────────────────────────────────
+function SqlExplorer() {
+  const [db, setDb] = useState("crm");
+  const [tables, setTables] = useState([]);
+  const [sql, setSql] = useState("SELECT * FROM organization LIMIT 20");
+  const [result, setResult] = useState(null); // { columns, rows } | null
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchTables = useCallback((dbName) => {
+    sqlTables(dbName).then(setTables).catch(() => setTables([]));
+  }, []);
+
+  useEffect(() => { fetchTables(db); }, [db, fetchTables]);
+
+  const switchDb = (dbName) => {
+    setDb(dbName);
+    setResult(null);
+    setError(null);
+    const starter = dbName === "preqin"
+      ? 'SELECT * FROM Preqin_Export LIMIT 20'
+      : 'SELECT * FROM organization LIMIT 20';
+    setSql(starter);
+  };
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await sqlQuery(db, sql);
+      setResult(res);
+    } catch (e) {
+      // Try to extract the API error message
+      setError(e.message || "Query failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  };
+
+  const dbBtn = (id, label) => (
+    <button
+      onClick={() => switchDb(id)}
+      style={{
+        background: db === id ? "var(--subtle)" : "none",
+        border: db === id ? "1px solid var(--border-hi)" : "1px solid var(--border)",
+        borderRadius: "6px", color: db === id ? "var(--tx1)" : "var(--tx3)",
+        padding: "0.3rem 0.85rem", fontSize: "0.8rem", cursor: "pointer",
+        fontWeight: db === id ? 600 : 400,
+      }}
+    >{label}</button>
+  );
+
+  return (
+    <div style={{ maxWidth: "1000px" }}>
+      {/* DB selector */}
+      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "1rem" }}>
+        {dbBtn("crm", "lp_crm.db")}
+        {dbBtn("preqin", "preqin_funds.db")}
+      </div>
+
+      {/* Tables list */}
+      {tables.length > 0 && (
+        <div style={{ marginBottom: "0.75rem", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+          {tables.map(t => (
+            <span
+              key={t}
+              onClick={() => setSql(`SELECT * FROM "${t}" LIMIT 20`)}
+              style={{
+                cursor: "pointer", background: "var(--card)", border: "1px solid var(--border)",
+                borderRadius: "4px", padding: "0.15rem 0.55rem", fontSize: "0.72rem",
+                color: "var(--tx3)", fontFamily: "monospace",
+              }}
+              title={`SELECT * FROM "${t}" LIMIT 20`}
+            >{t}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Query area */}
+      <textarea
+        value={sql}
+        onChange={e => setSql(e.target.value)}
+        onKeyDown={onKeyDown}
+        rows={5}
+        spellCheck={false}
+        style={{
+          width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.82rem",
+          background: "var(--card)", color: "var(--tx1)", border: "1px solid var(--border)",
+          borderRadius: "8px", padding: "0.65rem 0.85rem", resize: "vertical", outline: "none",
+          marginBottom: "0.5rem",
+        }}
+      />
+      <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginBottom: "1rem" }}>
+        <button onClick={run} disabled={loading} style={{ ...btnPrimary, fontSize: "0.82rem" }}>
+          {loading ? "Running…" : "Run  ⌘↵"}
+        </button>
+        <span style={{ color: "var(--tx5)", fontSize: "0.72rem" }}>Results capped at 100 rows</span>
+        {result && (
+          <span style={{ color: "var(--tx4)", fontSize: "0.72rem", marginLeft: "auto" }}>
+            {result.rows.length} row{result.rows.length !== 1 ? "s" : ""}
+            {result.rows.length === 100 ? " (limit reached)" : ""}
+            {" · "}{result.columns.length} col{result.columns.length !== 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{
+          background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
+          borderRadius: "6px", padding: "0.6rem 0.85rem", color: "#f87171",
+          fontFamily: "monospace", fontSize: "0.8rem", marginBottom: "1rem", whiteSpace: "pre-wrap",
+        }}>{error}</div>
+      )}
+
+      {/* Results table */}
+      {result && result.columns.length > 0 && (
+        <div style={{ overflowX: "auto", borderRadius: "8px", border: "1px solid var(--border)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+            <thead>
+              <tr style={{ background: "var(--subtle)" }}>
+                {result.columns.map(col => (
+                  <th key={col} style={{
+                    padding: "0.45rem 0.7rem", textAlign: "left", color: "var(--tx3)",
+                    fontWeight: 600, fontSize: "0.7rem", textTransform: "uppercase",
+                    letterSpacing: "0.05em", borderBottom: "1px solid var(--border)",
+                    whiteSpace: "nowrap",
+                  }}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {result.rows.map((row, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 1 ? "var(--subtle)" : undefined }}>
+                  {row.map((cell, j) => (
+                    <td key={j} style={{
+                      padding: "0.35rem 0.7rem", color: cell == null ? "var(--tx5)" : "var(--tx1)",
+                      fontFamily: typeof cell === "number" ? "monospace" : undefined,
+                      maxWidth: "320px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }} title={cell == null ? "NULL" : String(cell)}>
+                      {cell == null ? <span style={{ color: "var(--tx5)", fontStyle: "italic" }}>NULL</span> : String(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {result && result.columns.length === 0 && (
+        <div style={{ color: "var(--tx4)", fontSize: "0.82rem" }}>Query returned no columns.</div>
+      )}
     </div>
   );
 }
@@ -159,6 +322,7 @@ export function SettingsView({ onBack }) {
         {TAB("lists", "Lists")}
         {TAB("people", "People")}
         {TAB("colors", "Colors")}
+        {TAB("sql", "SQL")}
       </div>
 
       {/* ── LISTS TAB ───────────────────────────────────────────────────────── */}
@@ -378,6 +542,9 @@ export function SettingsView({ onBack }) {
 
         </div>
       )}
+
+      {/* ── SQL TAB ─────────────────────────────────────────────────────────── */}
+      {tab === "sql" && <SqlExplorer />}
     </div>
   );
 }

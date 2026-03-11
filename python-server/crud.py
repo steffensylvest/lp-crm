@@ -171,7 +171,17 @@ def _s_fund(fund: FundV2, include_org: bool = False) -> Dict:
         # External IDs
         "preqin_fund_id": fund.preqin_fund_id,
         "preqin_series_id": fund.preqin_series_id,
+        # ESG
+        "impact_flag": bool(fund.impact_flag),
         "deleted_at": fund.deleted_at,
+        # Taxonomy fields — populated by _attach_taxonomy_to_funds (None = not yet loaded)
+        "asset_class": None,
+        "strategy": None,
+        "sub_strategy": None,
+        "sectors": [],
+        "geographies": [],
+        "target_markets": [],
+        "strategy_tag_ids": [],
     }
     if include_org and fund.org:
         d["org"] = {
@@ -180,6 +190,83 @@ def _s_fund(fund: FundV2, include_org: bool = False) -> Dict:
             "org_type": fund.org.org_type,
         }
     return d
+
+
+def _attach_taxonomy_to_funds(db: Session, fund_dicts: List[Dict]) -> None:
+    """Batch-load entity_taxonomy for all fund IDs and attach derived fields in-place.
+    Sets: asset_class, strategy, sub_strategy, sectors, geographies, target_markets, strategy_tag_ids.
+    """
+    if not fund_dicts:
+        return
+    fund_ids = [f["id"] for f in fund_dicts]
+
+    # Load all taxonomy items once (needed for parent traversal)
+    all_tax: Dict[str, TaxonomyItem] = {t.id: t for t in db.query(TaxonomyItem).all()}
+
+    # Bulk-load entity_taxonomy rows for these funds
+    from sqlalchemy import and_
+    rows = (
+        db.query(EntityTaxonomy)
+        .filter(
+            and_(
+                EntityTaxonomy.entity_type == "fund",
+                EntityTaxonomy.entity_id.in_(fund_ids),
+            )
+        )
+        .all()
+    )
+
+    # Group by fund_id and taxonomy type
+    from collections import defaultdict
+    fund_tax: Dict[str, Dict[str, List[TaxonomyItem]]] = defaultdict(
+        lambda: {"strategy": [], "sector": [], "geography": [], "target_market": []}
+    )
+    for et in rows:
+        ti = all_tax.get(et.taxonomy_id)
+        if ti and ti.type in fund_tax[et.entity_id]:
+            fund_tax[et.entity_id][ti.type].append(ti)
+
+    def derive_strategy(ti: TaxonomyItem):
+        """Given a taxonomy item, return (asset_class_name, strategy_name, sub_strategy_name)."""
+        chain = [ti]
+        cur = ti
+        while cur.parent_id:
+            parent = all_tax.get(cur.parent_id)
+            if not parent:
+                break
+            chain.append(parent)
+            cur = parent
+
+        asset_class = strategy = sub_strategy = None
+        for item in chain:
+            ll = item.level_label
+            if ll == "asset_class" and asset_class is None:
+                asset_class = item.name
+            elif ll == "strategy" and strategy is None:
+                strategy = item.name
+            elif ll == "sub_strategy" and sub_strategy is None:
+                sub_strategy = item.name
+        return asset_class, strategy, sub_strategy
+
+    for fund_dict in fund_dicts:
+        fid = fund_dict["id"]
+        tax = fund_tax[fid]
+
+        strat_tags = tax["strategy"]
+        asset_class = strategy = sub_strategy = None
+        tag_ids = []
+        if strat_tags:
+            primary = strat_tags[0]
+            tag_ids = [t.id for t in strat_tags]
+            asset_class, strategy, sub_strategy = derive_strategy(primary)
+
+        fund_dict["asset_class"] = asset_class
+        fund_dict["strategy"] = strategy
+        fund_dict["sub_strategy"] = sub_strategy
+        fund_dict["sectors"] = [t.name for t in tax["sector"]]
+        fund_dict["geographies"] = [t.name for t in tax["geography"]]
+        fund_dict["target_markets"] = [t.name for t in tax["target_market"]]
+        fund_dict["strategy_tag_ids"] = tag_ids
 
 
 def _s_org(
@@ -308,6 +395,7 @@ def get_organizations(
     org_type: Optional[str] = None,
     rating_id: Optional[str] = None,
     owner: Optional[str] = None,
+    name: Optional[str] = None,
     include_deleted: bool = False,
 ) -> List[Dict]:
     q = db.query(Organization)
@@ -319,15 +407,22 @@ def get_organizations(
         q = q.filter(Organization.rating_id == rating_id)
     if owner:
         q = q.filter(Organization.owner == owner)
+    if name:
+        q = q.filter(Organization.name.ilike("%" + name + "%"))
     orgs = q.order_by(Organization.name).all()
-    return [_s_org(o, include_funds=True, include_people=True) for o in orgs]
+    result = [_s_org(o, include_funds=True, include_people=True) for o in orgs]
+    all_fund_dicts = [f for org_d in result for f in org_d.get("funds", [])]
+    _attach_taxonomy_to_funds(db, all_fund_dicts)
+    return result
 
 
 def get_organization(db: Session, org_id: str) -> Optional[Dict]:
     org = db.query(Organization).filter(Organization.id == org_id).first()
     if not org:
         return None
-    return _s_org(org, include_funds=True, include_people=True)
+    result = _s_org(org, include_funds=True, include_people=True)
+    _attach_taxonomy_to_funds(db, result.get("funds", []))
+    return result
 
 
 def create_organization(db: Session, data: Dict) -> Dict:
@@ -405,6 +500,22 @@ def patch_organization_field(
         changed_by=changed_by,
     )
     db.add(entry)
+    # When a field is cleared, reactivate any accepted Preqin suggestion so it
+    # reappears as a pending suggestion for the user to accept again.
+    if new_value is None:
+        fp = (
+            db.query(FieldProvenance)
+            .filter(
+                FieldProvenance.entity_type == "organization",
+                FieldProvenance.entity_id == org_id,
+                FieldProvenance.field_name == field_name,
+                FieldProvenance.status == "accepted",
+            )
+            .first()
+        )
+        if fp:
+            fp.status = "pending"
+            fp.proposed_at = _now()
     db.commit()
     db.refresh(org)
     return _s_org(org)
@@ -444,14 +555,18 @@ def get_funds(
     if pipeline_stage_id:
         q = q.filter(FundV2.pipeline_stage_id == pipeline_stage_id)
     funds = q.order_by(FundV2.name).all()
-    return [_s_fund(f, include_org=True) for f in funds]
+    result = [_s_fund(f, include_org=True) for f in funds]
+    _attach_taxonomy_to_funds(db, result)
+    return result
 
 
 def get_fund(db: Session, fund_id: str) -> Optional[Dict]:
     fund = db.query(FundV2).filter(FundV2.id == fund_id).first()
     if not fund:
         return None
-    return _s_fund(fund, include_org=True)
+    result = _s_fund(fund, include_org=True)
+    _attach_taxonomy_to_funds(db, [result])
+    return result
 
 
 def create_fund(db: Session, data: Dict) -> Dict:
@@ -526,6 +641,7 @@ def create_fund(db: Session, data: Dict) -> Dict:
         pme_index=data.get("pme_index"),
         preqin_fund_id=data.get("preqin_fund_id"),
         preqin_series_id=data.get("preqin_series_id"),
+        impact_flag=data.get("impact_flag", False),
     )
     db.add(fund)
     db.commit()
@@ -556,6 +672,7 @@ def update_fund(db: Session, fund_id: str, data: Dict) -> Optional[Dict]:
         "nav", "undrawn_value", "perf_date",
         "quartile_ranking", "benchmark_name", "pme", "pme_index",
         "preqin_fund_id", "preqin_series_id",
+        "impact_flag",
     ]:
         if f in data:
             setattr(fund, f, data[f])
@@ -592,6 +709,22 @@ def patch_fund_field(
         changed_by=changed_by,
     )
     db.add(entry)
+    # When a field is cleared, reactivate any accepted Preqin suggestion so it
+    # reappears as a pending suggestion for the user to accept again.
+    if new_value is None:
+        fp = (
+            db.query(FieldProvenance)
+            .filter(
+                FieldProvenance.entity_type == "fund",
+                FieldProvenance.entity_id == fund_id,
+                FieldProvenance.field_name == field_name,
+                FieldProvenance.status == "accepted",
+            )
+            .first()
+        )
+        if fp:
+            fp.status = "pending"
+            fp.proposed_at = _now()
     db.commit()
     db.refresh(fund)
     return _s_fund(fund, include_org=True)
@@ -889,6 +1022,8 @@ def get_people(
     db: Session,
     org_id: Optional[str] = None,
     include_deleted: bool = False,
+    search: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> List[Dict]:
     if org_id:
         org_persons = db.query(OrgPerson).filter(OrgPerson.org_id == org_id).all()
@@ -897,10 +1032,34 @@ def get_people(
             if op.person and (include_deleted or not op.person.deleted_at)
         ]
         return [_s_person(p) for p in people]
-    q = db.query(Person)
+
+    dbq = db.query(Person)
     if not include_deleted:
-        q = q.filter(Person.deleted_at == None)  # noqa: E711
-    return [_s_person(p) for p in q.order_by(Person.last_name, Person.first_name).all()]
+        dbq = dbq.filter(Person.deleted_at == None)  # noqa: E711
+    if search:
+        s = f"%{search.lower()}%"
+        from sqlalchemy import func
+        dbq = dbq.filter(
+            func.lower(Person.first_name + " " + Person.last_name).like(s) |
+            func.lower(Person.email).like(s) |
+            func.lower(Person.title).like(s)
+        )
+    dbq = dbq.order_by(Person.last_name, Person.first_name)
+    if limit:
+        dbq = dbq.limit(limit)
+    people = dbq.all()
+
+    # Attach first org name for display context
+    result = []
+    for p in people:
+        d = _s_person(p)
+        op = db.query(OrgPerson).filter(OrgPerson.person_id == p.id).first()
+        if op and op.org:
+            d["org_name"] = op.org.name
+            d["org_id"] = op.org_id
+            d["org_type"] = op.org.org_type
+        result.append(d)
+    return result
 
 
 def get_person(db: Session, person_id: str) -> Optional[Dict]:
@@ -983,6 +1142,174 @@ def unlink_person_from_org(db: Session, org_id: str, person_id: str) -> bool:
     db.delete(op)
     db.commit()
     return True
+
+
+def find_or_create_person(db: Session, data: Dict) -> Dict:
+    """Find an existing person by name within an org (or globally), else create them.
+
+    Matching: case-insensitive first+last name match, not deleted.
+    If org_id is given, search that org first; fall back to global search.
+    On create: also creates an OrgPerson link if org_id is provided.
+    """
+    first = (data.get("first_name") or "").strip()
+    last = (data.get("last_name") or "").strip()
+    org_id = data.get("org_id")
+    title = data.get("title")
+
+    # Search in org first if provided
+    if org_id:
+        ops = db.query(OrgPerson).filter(OrgPerson.org_id == org_id).all()
+        for op in ops:
+            p = op.person
+            if p and not p.deleted_at:
+                if (p.first_name or "").strip().lower() == first.lower() and \
+                   (p.last_name or "").strip().lower() == last.lower():
+                    return _s_person(p)
+
+    # Global search
+    existing = db.query(Person).filter(
+        Person.deleted_at == None,  # noqa: E711
+        Person.first_name.ilike(first),
+        Person.last_name.ilike(last),
+    ).first()
+    if existing:
+        # Link to org if not already linked
+        if org_id:
+            already = db.query(OrgPerson).filter(
+                OrgPerson.org_id == org_id,
+                OrgPerson.person_id == existing.id,
+            ).first()
+            if not already:
+                db.add(OrgPerson(id=_uid(), org_id=org_id, person_id=existing.id,
+                                 role=title, is_primary=False))
+                db.commit()
+        return _s_person(existing)
+
+    # Create new
+    person = Person(
+        id=_uid(),
+        first_name=first or None,
+        last_name=last or None,
+        title=title,
+    )
+    db.add(person)
+    db.flush()
+    if org_id:
+        db.add(OrgPerson(id=_uid(), org_id=org_id, person_id=person.id,
+                         role=title, is_primary=False))
+    db.commit()
+    db.refresh(person)
+    return _s_person(person)
+
+
+def get_duplicate_people(db: Session) -> List[Dict]:
+    """Return groups of people sharing the same normalized full name (potential duplicates)."""
+    people = db.query(Person).filter(Person.deleted_at == None).all()  # noqa: E711
+    groups = {}
+    for p in people:
+        key = f"{(p.first_name or '').strip().lower()} {(p.last_name or '').strip().lower()}".strip()
+        if not key:
+            continue
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(p)
+
+    result = []
+    for k, ps in groups.items():
+        if len(ps) < 2:
+            continue
+        people_with_org = []
+        for p in ps:
+            d = _s_person(p)
+            # Attach first org name for display context
+            op = db.query(OrgPerson).filter(OrgPerson.person_id == p.id).first()
+            if op and op.org:
+                d["org_name"] = op.org.name
+            people_with_org.append(d)
+        result.append({"key": k, "people": people_with_org})
+    return result
+
+
+def merge_people(db: Session, keep_id: str, merge_ids: List[str]) -> Dict:
+    """Transfer all relationships from merge_ids to keep_id, then soft-delete merged persons."""
+    keep = db.query(Person).filter(Person.id == keep_id).first()
+    if not keep:
+        return {"error": "keep person not found"}
+    for mid in merge_ids:
+        # Transfer OrgPerson links
+        for op in db.query(OrgPerson).filter(OrgPerson.person_id == mid).all():
+            exists = db.query(OrgPerson).filter(
+                OrgPerson.org_id == op.org_id,
+                OrgPerson.person_id == keep_id,
+            ).first()
+            if not exists:
+                op.person_id = keep_id
+            else:
+                db.delete(op)
+        # Transfer MeetingAttendee records
+        for ma in db.query(MeetingAttendee).filter(MeetingAttendee.person_id == mid).all():
+            ma.person_id = keep_id
+        # Soft-delete the merged person
+        merged = db.query(Person).filter(Person.id == mid).first()
+        if merged:
+            merged.deleted_at = _now()
+    db.commit()
+    db.refresh(keep)
+    return _s_person(keep)
+
+
+def get_duplicate_funds(db: Session) -> List[Dict]:
+    """Return groups of funds sharing the same normalized name (potential duplicates)."""
+    funds = db.query(FundV2).filter(FundV2.deleted_at == None).all()  # noqa: E711
+    groups = {}
+    for f in funds:
+        key = (f.name or "").strip().lower()
+        if not key:
+            continue
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(f)
+    return [
+        {"key": k, "funds": [_s_fund(f, include_org=True) for f in fs]}
+        for k, fs in groups.items()
+        if len(fs) > 1
+    ]
+
+
+def merge_funds(db: Session, keep_id: str, merge_ids: List[str]) -> Dict:
+    """Transfer meeting entities, notes, provenance, audit entries to keep_id; soft-delete merged."""
+    keep = db.query(FundV2).filter(FundV2.id == keep_id).first()
+    if not keep:
+        return {"error": "keep fund not found"}
+    for mid in merge_ids:
+        # Transfer meeting entity links
+        for me in db.query(MeetingEntity).filter(
+            MeetingEntity.entity_type == "fund",
+            MeetingEntity.entity_id == mid,
+        ).all():
+            me.entity_id = keep_id
+        # Transfer notes
+        for note in db.query(Note).filter(
+            Note.entity_type == "fund", Note.entity_id == mid,
+        ).all():
+            note.entity_id = keep_id
+        # Transfer provenance rows
+        for fp in db.query(FieldProvenance).filter(
+            FieldProvenance.entity_type == "fund", FieldProvenance.entity_id == mid,
+        ).all():
+            fp.entity_id = keep_id
+        # Transfer audit log entries
+        for al in db.query(AuditLog).filter(
+            AuditLog.entity_type == "fund", AuditLog.entity_id == mid,
+        ).all():
+            al.entity_id = keep_id
+        # Soft-delete the merged fund
+        merged = db.query(FundV2).filter(FundV2.id == mid).first()
+        if merged:
+            merged.deleted_at = _now()
+    db.commit()
+    db.refresh(keep)
+    return _s_fund(keep)
 
 
 # ── Audit Log ─────────────────────────────────────────────────────────────────

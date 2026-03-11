@@ -294,7 +294,7 @@ DATA_SOURCES = [
 ]
 
 
-# ── Preqin external source + column map ───────────────────────────────────────
+# ── Preqin external sources + column maps ─────────────────────────────────────
 
 PREQIN_COLUMN_MAP = [
     # (external_table, external_column, our_entity_type, our_field_name, transform)
@@ -319,6 +319,43 @@ PREQIN_COLUMN_MAP = [
     ("Preqin_Export", "SUSTAINABILITY LABELS",          "fund",         "entity_attribute:esg_labels",  None),
     ("Preqin_Export", "SUSTAINABILITY THEMES",          "fund",         "entity_attribute:esg_themes",  None),
     ("Preqin_Export", "UN SDG ALIGNMENT",               "fund",         "entity_attribute:un_sdg",      None),
+]
+
+PREQIN_PERFORMANCE_COLUMN_MAP = [
+    # (external_table, external_column, our_entity_type, our_field_name, transform)
+    # Match key (not a suggestion — filtered in preqin_sync.py)
+    ("Preqin_Export", "FUND ID",                    "fund", "preqin_fund_id",   None),
+    # Performance metrics
+    ("Preqin_Export", "NET IRR (%)",                "fund", "net_irr",          "to_str"),
+    ("Preqin_Export", "NET MULTIPLE (X)",           "fund", "net_moic",         "to_str"),
+    ("Preqin_Export", "NET MULTIPLE (X)",           "fund", "tvpi",             "to_str"),
+    # DPI/RVPI in Preqin = % of paid-in (e.g. 45.6 = 45.6%); div100 → multiple (0.456x)
+    ("Preqin_Export", "DPI (%)",                    "fund", "dpi",              "div100"),
+    ("Preqin_Export", "RVPI (%)",                   "fund", "rvpi",             "div100"),
+    ("Preqin_Export", "DATE REPORTED",              "fund", "perf_date",        "to_date"),
+    # Valuation
+    ("Preqin_Export", "FUND AUM (CURR. MN)",        "fund", "nav",              "to_str"),
+    ("Preqin_Export", "FUND DRY POWDER (CURR. MN)", "fund", "undrawn_value",    "to_str"),
+    # Benchmarking (existing columns on fund_v2)
+    ("Preqin_Export", "PREQIN QUARTILE RANK",       "fund", "quartile_ranking", "to_int"),
+    ("Preqin_Export", "BENCHMARK NAME",             "fund", "benchmark_name",   "to_str"),
+    ("Preqin_Export", "S&P 500 LN-PME",             "fund", "pme",              "to_str"),
+    ("Preqin_Export", "S&P 500 PME+",               "fund", "pme_index",        "to_str"),
+]
+
+PREQIN_MANAGERS_COLUMN_MAP = [
+    # (external_table, external_column, our_entity_type, our_field_name, transform)
+    # Match key (not a suggestion — filtered in preqin_sync.py)
+    ("Preqin_Export", "FIRM ID",                                   "organization", "preqin_manager_id",    None),
+    # Firm fields — all map to existing organization columns
+    ("Preqin_Export", "FIRM NAME",                                 "organization", "name",                 None),
+    ("Preqin_Export", "WEBSITE",                                   "organization", "website",              None),
+    ("Preqin_Export", "YEAR EST.",                                 "organization", "founded_year",         "to_int"),
+    ("Preqin_Export", "TOTAL STAFF",                               "organization", "total_team_size",      "to_int"),
+    ("Preqin_Export", "INVESTMENT TEAM STAFF",                     "organization", "investment_team_size", "to_int"),
+    ("Preqin_Export", "TOTAL:ASSETS UNDER MANAGEMENT (USD MN)",   "organization", "aum",                  "to_str"),
+    ("Preqin_Export", "TOTAL: ASSETS UNDER MANAGEMENT(DATE)",     "organization", "aum_date",             "to_date"),
+    ("Preqin_Export", "FIRM'S MAIN CURRENCY",                      "organization", "aum_currency",         None),
 ]
 
 
@@ -385,15 +422,50 @@ def seed():
 
         print("Seeding external_source (Preqin)...")
         upsert(db, ExternalSource, id="es_preqin", name="preqin",
-               file_path="external/preqin.db",
+               file_path="external/preqin_funds.db",
                description="Preqin fund + manager export (Preqin_Export table). "
                            "Updated manually. Column headers may change — update "
                            "external_column_map when they do.")
 
-        print("Seeding external_column_map (Preqin)...")
+        print("Seeding external_column_map (Preqin funds)...")
         for ext_table, ext_col, entity_type, field_name, transform in PREQIN_COLUMN_MAP:
             upsert_column_map(db,
                 source_id="es_preqin",
+                external_table=ext_table,
+                external_column=ext_col,
+                our_entity_type=entity_type,
+                our_field_name=field_name,
+                transform=transform,
+                is_active=True,
+            )
+
+        print("Seeding external_source (Preqin performance)...")
+        upsert(db, ExternalSource, id="es_preqin_performance", name="preqin_performance",
+               file_path="external/preqin_performance.db",
+               description="Preqin performance export (net IRR, net multiple, DPI, RVPI, NAV, quartile). "
+                           "DPI/RVPI stored as multiples (div100 applied to convert from %).")
+
+        print("Seeding external_column_map (Preqin performance)...")
+        for ext_table, ext_col, entity_type, field_name, transform in PREQIN_PERFORMANCE_COLUMN_MAP:
+            upsert_column_map(db,
+                source_id="es_preqin_performance",
+                external_table=ext_table,
+                external_column=ext_col,
+                our_entity_type=entity_type,
+                our_field_name=field_name,
+                transform=transform,
+                is_active=True,
+            )
+
+        print("Seeding external_source (Preqin managers)...")
+        upsert(db, ExternalSource, id="es_preqin_managers", name="preqin_managers",
+               file_path="external/Preqin_managers.db",
+               description="Preqin managers/firms export (name, AUM, website, team size, founded year).")
+
+        print("Seeding external_column_map (Preqin managers)...")
+        for ext_table, ext_col, entity_type, field_name, transform in PREQIN_MANAGERS_COLUMN_MAP:
+            upsert_column_map(db,
+                source_id="es_preqin_managers",
                 external_table=ext_table,
                 external_column=ext_col,
                 our_entity_type=entity_type,

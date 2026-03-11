@@ -42,7 +42,7 @@ npm run dev:client        # Vite client only
 |------|----------|
 | `main.py` | FastAPI app — includes routes_v2 router |
 | `database.py` | SQLAlchemy engine setup, reads `DATABASE_URL` from `.env` |
-| `models_v2.py` | ORM: 20 tables (organization, fund, meeting, person, taxonomy_item, lookup_category, lookup_item, audit_log, etc.) |
+| `models.py` | ORM: 20 tables (organization, fund, meeting, person, taxonomy_item, lookup_category, lookup_item, audit_log, etc.) |
 | `crud.py` | All CRUD functions + serializers for v2 entities |
 | `routes_v2.py` | `/api/v2/*` router (~40 endpoints) |
 | `seed_v2.py` | Seeds taxonomy + lookup reference data (idempotent) |
@@ -53,7 +53,7 @@ npm run dev:client        # Vite client only
 | `.env` | `DATABASE_URL=sqlite:///./lp_crm.db` (not committed) |
 | `.env.example` | Template with SQLite + Snowflake connection string examples |
 | `lp_crm.db` | SQLite database file (not committed) |
-| `external/preqin.db` | Preqin export — not committed, place manually |
+| `external/preqin_funds.db` | Preqin export — not committed, place manually |
 
 ### API endpoints
 
@@ -82,7 +82,13 @@ All v2 endpoints are under `/api/v2/`.
 | GET | `/api/v2/audit` | Change log (`?entity_type=&entity_id=`) |
 | GET/POST | `/api/v2/tasks` | List or create tasks |
 | PUT/DELETE | `/api/v2/tasks/{id}` | Update or delete task |
-| GET | `/api/v2/external/preqin/search` | Search Preqin DB (`?q=`) |
+| GET | `/api/v2/external/preqin/search` | Search Preqin DB (`?q=&firm_id=`) — firm_id filters to one manager |
+| GET | `/api/v2/external/preqin/managers` | Search Preqin managers (`?q=`) |
+| GET | `/api/v2/external/preqin/series/{id}` | All funds in a Preqin series |
+| GET | `/api/v2/external/preqin/link-suggestions` | Funds with potential Preqin matches |
+| POST | `/api/v2/external/sync` | Trigger Preqin data sync |
+| GET | `/api/v2/external/pending` | Pending provenance items |
+| PATCH | `/api/v2/external/provenance/{id}/accept\|reject` | Accept or reject a Preqin field suggestion |
 
 **PATCH** body: `{ "field": "rating_id", "value": "li_fund_rating_a", "note": "...", "changed_by": "..." }` — auto-writes to `audit_log`.
 

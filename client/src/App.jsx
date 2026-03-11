@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { loadLookups, loadTaxonomy, loadOrganizations, patchOrganizationField, patchFundField, loadMeetings, loadPendingProvenance, acceptProvenance, rejectProvenance } from "./api.js";
+import { loadLookups, loadTaxonomy, loadOrganizations, loadOrganization, patchOrganizationField, patchFundField, loadMeetings, saveMeeting, updateMeeting, loadPendingProvenance, acceptProvenance, rejectProvenance, loadPeople } from "./api.js";
 import { DARK, LIGHT, btnGhost } from './theme.js';
-import { SCORE_CONFIG, PIPELINE_STAGES, STATUS_OPTIONS, SHORTCUTS } from './constants.js';
+import { SCORE_CONFIG, PIPELINE_STAGES, STATUS_OPTIONS, SHORTCUTS, MEETING_TYPE_ID } from './constants.js';
 import { uid, now } from './utils.js';
 
 import { Overlay, OverlayHeader } from './components/Overlay.jsx';
@@ -9,6 +9,7 @@ import { GPDetailOverlay } from './components/GPDetail.jsx';
 import { FundDetailOverlay } from './components/FundDetail.jsx';
 import { MeetingDetailOverlay } from './components/MeetingDetail.jsx';
 import { PipelineBoard } from './components/PipelineBoard.jsx';
+import { PipelineView } from './components/PipelineView.jsx';
 import { FilterDropdown } from './components/FilterDropdown.jsx';
 import { DenseTable } from './components/DenseTable.jsx';
 import { AllMeetingsView, AllFundsView, TagFilterView, GradeAView, FundraisingView } from './components/Views.jsx';
@@ -20,6 +21,7 @@ import { SettingsContext } from './settingsContext.js';
 import { SettingsView } from './components/SettingsView.jsx';
 import { PlacementAgentDetailOverlay } from './components/PlacementAgentDetail.jsx';
 import { DataReviewView, ProvenanceBanner } from './components/DataReview.jsx';
+import { PeopleView, PersonDetailOverlay } from './components/PersonDetail.jsx';
 
 // ─── v2 → display-compatible normalizers ─────────────────────────────────────
 // These convert v2 API shapes to the format DenseTable/GPDetail expect.
@@ -54,9 +56,22 @@ function normalizeV2Fund(f) {
     perfDate:         f.perf_date         ?? f.perfDate         ?? null,
     icDate:           f.ic_date           ?? f.icDate           ?? null,
     expectedAmount:   f.expected_amount   ?? f.expectedAmount   ?? null,
-    investmentAmount: f.investment_amount ?? f.investmentAmount ?? null,
+    investmentAmount:   f.investment_amount   ?? f.investmentAmount   ?? null,
+    investmentCurrency: f.investment_currency ?? f.investmentCurrency ?? f.currency ?? null,
     nextMarket:       f.next_market       ?? f.nextMarket       ?? null,
     subStrategy:      f.sub_strategy      ?? f.subStrategy      ?? null,
+    preqinFundId:     f.preqin_fund_id    ?? f.preqinFundId    ?? null,
+    preqinSeriesId:   f.preqin_series_id  ?? f.preqinSeriesId  ?? null,
+    // ESG
+    impactFlag:       f.impact_flag       ?? f.impactFlag       ?? false,
+    // Taxonomy-derived fields (from backend _attach_taxonomy_to_funds)
+    assetClass:       f.asset_class       ?? f.assetClass       ?? null,
+    strategy:         f.strategy          ?? null,
+    // subStrategy already set above from sub_strategy / subStrategy
+    sectors:          f.sectors           ?? [],
+    geographies:      f.geographies       ?? [],
+    targetMarkets:    f.target_markets    ?? f.targetMarkets    ?? [],
+    strategyTagIds:   f.strategy_tag_ids  ?? f.strategyTagIds  ?? [],
   };
 }
 
@@ -108,16 +123,19 @@ export default function App() {
   const [condensed, setCondensed] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [allPeople, setAllPeople] = useState([]);
 
   // Overlays
   const [gpOverlay, setGpOverlay] = useState(null);    // gp object
   const [fundOverlay, setFundOverlay] = useState(null); // { fund, gp }
   const [meetingOverlay, setMeetingOverlay] = useState(null); // { meeting, gp }
   const [paOverlay, setPaOverlay] = useState(null);     // placement agent object
+  const [personOverlay, setPersonOverlay] = useState(null); // person object from /people
   const [showAddNew, setShowAddNew] = useState(false); // replaces showAddGP
   const [showAddGP, setShowAddGP] = useState(false);
   const [logMeeting, setLogMeeting] = useState(null); // { gp, fundId? } — app-level meeting logger
   const [editMeeting, setEditMeeting] = useState(null); // { gp, meeting } — edit existing meeting
+  const [meetingsRefreshAt, setMeetingsRefreshAt] = useState(0); // bumped after successful meeting save
 
   // Z-index stack — tracks which modal opened last so it's always on top
   const [modalZs, setModalZs] = useState({});
@@ -157,6 +175,7 @@ export default function App() {
     ).catch(() => {});
     loadOrganizations().then(setOrganizations).catch(() => {});
     loadPendingProvenance().then(rows => setProvenance(rows ?? [])).catch(() => {});
+    loadPeople().then(rows => setAllPeople(rows ?? [])).catch(() => {});
   }, []);
 
 
@@ -180,6 +199,7 @@ export default function App() {
           else if (_top === 'fund')        { setFundOverlay(null); fundInlineEditingRef.current = false; }
           else if (_top === 'meeting')     { setMeetingOverlay(null); }
           else if (_top === 'pa')          { setPaOverlay(null); }
+          else if (_top === 'person')      { setPersonOverlay(null); }
           else if (_top === 'logMeeting')  { setLogMeeting(null); }
           else if (_top === 'editMeeting') { setEditMeeting(null); }
           else if (_top === 'addNew')      { setShowAddNew(false); }
@@ -250,22 +270,61 @@ export default function App() {
     setTodos(ts => ts.filter(t => t.id !== id));
   }, [setTodos]);
 
-  const saveLoggedMeeting = useCallback((m) => {
+  const saveLoggedMeeting = useCallback(async (m) => {
     if (!logMeeting?.gp) return;
+    if (useV2) {
+      const fundId = logMeeting.fundId || m.fundId || null;
+      const payload = {
+        date: m.date || null,
+        type_id: MEETING_TYPE_ID[m.type] ?? null,
+        location: m.location || null,
+        topic: m.topic || null,
+        notes: m.notes || null,
+        created_by: m.loggedBy || "Me",
+        entities: [
+          { entity_type: "organization", entity_id: logMeeting.gp.id, is_primary: true },
+          ...(fundId ? [{ entity_type: "fund", entity_id: String(fundId) }] : []),
+        ],
+        attendees: m.attendees || [],
+      };
+      await saveMeeting(payload); // throws on failure — caught by MeetingForm.handleSave
+      // Link fund to placement agent if PA attendees were added
+      if (fundId && m._paOrgIds?.length > 0) {
+        patchFundField(String(fundId), "placement_agent_id", m._paOrgIds[0]).catch(() => {});
+      }
+      setMeetingsRefreshAt(t => t + 1);
+      setLogMeeting(null);
+      closeModal('logMeeting');
+      return;
+    }
     const freshGP = data.gps.find(g => g.id === logMeeting.gp.id) || logMeeting.gp;
     const newMeeting = { ...m, id: uid() };
-    if (!useV2) {
-      setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: [newMeeting, ...(freshGP.meetings || [])] } : g));
-    }
+    setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: [newMeeting, ...(freshGP.meetings || [])] } : g));
     setLogMeeting(null);
   }, [logMeeting, data, useV2]);
 
-  const saveEditedMeeting = useCallback((m) => {
+  const saveEditedMeeting = useCallback(async (m) => {
     if (!editMeeting?.gp) return;
-    const freshGP = data.gps.find(g => g.id === editMeeting.gp.id) || editMeeting.gp;
-    if (!useV2) {
-      setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: (freshGP.meetings || []).map(em => em.id === m.id ? m : em) } : g));
+    if (useV2) {
+      const fundId = m.fundId || null;
+      const payload = {
+        date: m.date || null,
+        type_id: MEETING_TYPE_ID[m.type] ?? null,
+        location: m.location || null,
+        topic: m.topic || null,
+        notes: m.notes || null,
+        created_by: m.loggedBy || m.created_by || "Me",
+        entities: [
+          { entity_type: "organization", entity_id: editMeeting.gp.id, is_primary: true },
+          ...(fundId ? [{ entity_type: "fund", entity_id: String(fundId) }] : []),
+        ],
+      };
+      await updateMeeting(editMeeting.meeting.id, payload).catch(console.error);
+      setEditMeeting(null);
+      return;
     }
+    const freshGP = data.gps.find(g => g.id === editMeeting.gp.id) || editMeeting.gp;
+    setGPs(gs => gs.map(g => g.id === freshGP.id ? { ...freshGP, meetings: (freshGP.meetings || []).map(em => em.id === m.id ? m : em) } : g));
     setEditMeeting(null);
   }, [editMeeting, data, useV2]);
 
@@ -313,18 +372,90 @@ export default function App() {
     if (fundOverlay?.gp?.id === updated.id) setFundOverlay(fov => fov ? { ...fov, gp: updated } : null);
   }, [useV2, gpOverlay, fundOverlay]);
 
+  // ── Pipeline table: update a fund's fields ────────────────────────────────
+  // Matches DenseTable behavior: optimistic local state update.
+  // Also persists impact_flag and owner directly to API (direct DB fields).
+  const handleUpdateFundPipeline = useCallback((fund, patch) => {
+    const p = (field, val) => patchFundField(fund.id, field, val).catch(() => {});
+
+    // Build extra state fields needed so normalizeV2Fund re-reads new values
+    const stateExtras = {};
+
+    if ("impact_flag"       in patch) p("impact_flag",        patch.impact_flag);
+    if ("impactFlag"        in patch) p("impact_flag",        patch.impactFlag);
+    if ("owner"             in patch) p("owner",              patch.owner);
+    if ("status"            in patch) p("status_id",          patch.status ? `li_fund_status_${patch.status.toLowerCase().replace(/[\s-]+/g, "_")}` : null);
+    if ("score"             in patch) {
+      p("rating_id", patch.score ? `li_fund_rating_${patch.score.toLowerCase()}` : null);
+      stateExtras.rating = patch.score ? { ...(fund.rating ?? {}), code: patch.score } : null;
+    }
+    if ("pipeline_stage_id" in patch) {
+      const stageItems = lookups?.items_by_category?.['pipeline-stage'] ?? [];
+      const stageItem = patch.pipeline_stage_id ? stageItems.find(i => i.code === patch.pipeline_stage_id) : null;
+      p("pipeline_stage_id", stageItem?.id ?? patch.pipeline_stage_id);
+      stateExtras.pipeline_stage = stageItem ?? null;
+    }
+    if ("vintage"           in patch) p("vintage",            patch.vintage);
+    if ("currency"          in patch) p("currency",           patch.currency);
+    if ("target_size"       in patch) p("target_size",        patch.target_size);
+    if ("hard_cap"          in patch) p("hard_cap",           patch.hard_cap);
+    if ("raised_size"       in patch) p("raised_size",        patch.raised_size);
+    if ("raised_date"       in patch) p("raised_date",        patch.raised_date);
+    if ("first_close_date"  in patch) p("first_close_date",   patch.first_close_date);
+    if ("next_close_date"   in patch) p("next_close_date",    patch.next_close_date);
+    if ("final_close_date"  in patch) p("final_close_date",   patch.final_close_date);
+    if ("strategy"          in patch) p("strategy",           patch.strategy);
+    if ("sub_strategy"      in patch) p("sub_strategy",       patch.sub_strategy);
+
+    setOrganizations(orgs => orgs.map(o => ({
+      ...o,
+      funds: (o.funds || []).map(f => f.id === fund.id ? { ...f, ...patch, ...stateExtras } : f),
+    })));
+  }, [lookups]);
+
   // ── Provenance helpers ────────────────────────────────────────────────────
   const provenanceFor = (entityType, entityId) =>
     provenance.filter(r => r.entity_type === entityType && String(r.entity_id) === String(entityId));
 
   const handleAcceptProvenance = useCallback(async (id) => {
+    const row = provenance.find(r => r.id === id);
     await acceptProvenance(id, "Me").catch(() => {});
     setProvenance(prev => prev.map(r => r.id === id ? { ...r, status: "accepted" } : r));
-  }, []);
+    if (row?.entity_type === "fund") {
+      setOrganizations(orgs => orgs.map(o => ({
+        ...o,
+        funds: (o.funds || []).map(f =>
+          f.id === row.entity_id ? { ...f, [row.field_name]: row.value } : f
+        ),
+      })));
+      setFundOverlay(fov => {
+        if (!fov || fov.fund?.id !== row.entity_id) return fov;
+        return { ...fov, fund: normalizeV2Fund({ ...fov.fund, [row.field_name]: row.value }) };
+      });
+    }
+    if (row?.entity_type === "organization") {
+      setOrganizations(orgs => orgs.map(o =>
+        o.id === row.entity_id ? { ...o, [row.field_name]: row.value } : o
+      ));
+      setGpOverlay(prev => {
+        if (!prev || prev.id !== row.entity_id) return prev;
+        return { ...prev, [row.field_name]: row.value };
+      });
+    }
+  }, [provenance]);
 
   const handleRejectProvenance = useCallback(async (id) => {
     await rejectProvenance(id, "Me").catch(() => {});
     setProvenance(prev => prev.filter(r => r.id !== id));
+  }, []);
+
+  const handleFieldCleared = useCallback((entityType, entityId, fieldName) => {
+    setProvenance(prev => prev.map(r =>
+      r.entity_type === entityType && String(r.entity_id) === String(entityId) &&
+      r.field_name === fieldName && r.status === "accepted"
+        ? { ...r, status: "pending" }
+        : r
+    ));
   }, []);
 
   const handlePipelineStage = useCallback((fundId, stage, gp) => {
@@ -339,6 +470,10 @@ export default function App() {
             ? { ...f, pipeline_stage_id: stageId, pipeline_stage: stageItem ?? null }
             : f) }
         : o));
+      setFundOverlay(fov => {
+        if (!fov || fov.fund?.id !== fundId) return fov;
+        return { ...fov, fund: normalizeV2Fund({ ...fov.fund, pipeline_stage_id: stageId, pipeline_stage: stageItem ?? null }) };
+      });
     } else {
       setData(d => {
         const pl = d.pipeline || [];
@@ -437,10 +572,11 @@ export default function App() {
             </span>
             <button onClick={() => setDarkMode(d => !d)} style={{ ...btnGhost, fontSize: "1rem", padding: "0.25rem 0.55rem" }} title={darkMode ? "Switch to light mode" : "Switch to dark mode"}>{darkMode ? "☀" : "☾"}</button>
             <button onClick={() => setView("settings")} style={{ ...btnGhost, fontSize: "1rem", padding: "0.25rem 0.55rem" }} title="Settings">⚙</button>
-            <button onClick={() => setView("pipeline")} style={{ ...btnGhost, color: "#a78bfa", borderColor: "#7c3aed", fontSize: "0.8125rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              Pipeline Board
+            <button onClick={() => setView("pipelineTable")} style={{ ...btnGhost, color: "#a78bfa", borderColor: "#7c3aed", fontSize: "0.8125rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              Pipeline
               <kbd style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "3px", padding: "0.05rem 0.3rem", fontFamily: "monospace", fontSize: "0.65rem", color: "var(--tx5)" }}>{SHORTCUTS.find(s=>s.view==="pipeline")?.key}</kbd>
             </button>
+            {useV2 && <button onClick={() => setView("people")} style={{ ...btnGhost, fontSize: "0.8125rem" }}>People</button>}
             {useV2 && (() => {
               const pendingCount = provenance.filter(r => r.status === "pending").length;
               return (
@@ -459,6 +595,8 @@ export default function App() {
         </div>
         {children}
       </div>
+      {/* Portal root — inherits CSS vars so picker popovers render correctly */}
+      <div id="portal-root" />
     </div>
     </SettingsContext.Provider>
   );
@@ -467,8 +605,9 @@ export default function App() {
     <>
       {showSearch && (
         <GlobalSearch
-          gps={gps}
-          placementAgents={placementAgents}
+          gps={displayOrgs}
+          placementAgents={useV2 ? organizations.filter(o => o.org_type === 'placement_agent').map(normalizeV2Org) : placementAgents}
+          persons={allPeople}
           query={searchQuery}
           onQueryChange={setSearchQuery}
           zIndex={zOf('search')}
@@ -478,6 +617,7 @@ export default function App() {
           onFundClick={(fund, gp) => { setFundOverlay({ fund, gp }); openModal('fund'); }}
           onMeetingClick={(m, gp) => { setMeetingOverlay({ meeting: m, gp }); openModal('meeting'); }}
           onPaClick={(pa) => { setPaOverlay(pa); openModal('pa'); }}
+          onPersonClick={(person) => { setPersonOverlay(person); openModal('person'); }}
         />
       )}
       {gpOverlay && (
@@ -492,6 +632,11 @@ export default function App() {
             if (useV2) setOrganizations(orgs => orgs.filter(o => o.id !== id));
             else setGPs(g => g.filter(x => x.id !== id));
           }}
+          provenanceRows={provenanceFor("organization", gpOverlay.id)}
+          onAcceptProvenance={handleAcceptProvenance}
+          onRejectProvenance={handleRejectProvenance}
+          onFieldCleared={handleFieldCleared}
+          placementAgents={useV2 ? (organizations?.filter(o => o.org_type === 'placement_agent') ?? []) : placementAgents}
         />
       )}
       {fundOverlay && (
@@ -502,6 +647,7 @@ export default function App() {
           provenanceRows={provenanceFor("fund", fundOverlay.fund?.id)}
           onAcceptProvenance={handleAcceptProvenance}
           onRejectProvenance={handleRejectProvenance}
+          onFieldCleared={handleFieldCleared}
           onPipelineStage={(fundId, stage) => handlePipelineStage(fundId, stage, fundOverlay.gp)}
           onClose={() => { setFundOverlay(null); closeModal('fund'); fundInlineEditingRef.current = false; }}
           zIndex={zOf('fund')}
@@ -515,12 +661,14 @@ export default function App() {
             }
           }}
           onSaveFund={(updated) => {
+            const normalized = normalizeV2Fund(updated);
             const gp = fundOverlay.gp;
-            const updatedGP = { ...gp, funds: (gp.funds||[]).map(f => f.id === updated.id ? updated : f) };
+            const updatedGP = { ...gp, funds: (gp.funds||[]).map(f => f.id === normalized.id ? normalized : f) };
             updateOrg(updatedGP);
-            setFundOverlay({ ...fundOverlay, fund: updated, gp: updatedGP });
+            setFundOverlay({ ...fundOverlay, fund: normalized, gp: updatedGP });
           }}
           onAddMeeting={(fid) => { setLogMeeting({ gp: fundOverlay.gp, fundId: fid }); openModal('logMeeting'); }}
+          meetingsRefreshKey={meetingsRefreshAt}
           onTagClick={handleTagClick}
           onMeetingClick={(m) => { setMeetingOverlay({ meeting: m, gp: fundOverlay.gp }); openModal('meeting'); }}
           placementAgents={placementAgents}
@@ -551,6 +699,18 @@ export default function App() {
           onDeletePA={(id) => { setPaOverlay(null); closeModal('pa'); setPAs(pas => pas.filter(p => p.id !== id)); }}
         />
       )}
+      {personOverlay && (
+        <PersonDetailOverlay
+          orgPerson={personOverlay}
+          orgName={personOverlay.org_name}
+          zIndex={zOf('person')}
+          onClose={() => { setPersonOverlay(null); closeModal('person'); }}
+          onUpdated={(updated) => {
+            setPersonOverlay(prev => ({ ...prev, ...updated }));
+            setAllPeople(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p));
+          }}
+        />
+      )}
       {meetingOverlay && (
         <MeetingDetailOverlay
           meeting={meetingOverlay.meeting}
@@ -577,6 +737,9 @@ export default function App() {
               unitMembers={allOwners}
               onSave={saveLoggedMeeting}
               onClose={() => { setLogMeeting(null); closeModal('logMeeting'); }}
+              orgId={logMeeting.gp?.id ?? null}
+              gpPeople={(logMeeting.gp?.people ?? []).map(op => op.person).filter(Boolean)}
+              placementAgents={useV2 ? (organizations?.filter(o => o.org_type === 'placement_agent') ?? []) : placementAgents}
             />
           </div>
         </Overlay>
@@ -600,9 +763,19 @@ export default function App() {
           gps={displayOrgs}
           onClose={() => { setShowAddNew(false); closeModal('addNew'); }}
           onAddGP={(d) => { setGPs(gs => [{ ...d, id: uid(), funds: [], meetings: [] }, ...gs]); }}
-          onAddFund={(gpId, d) => {
-            const gp = displayOrgs.find(g => g.id === gpId);
-            if (gp) updateOrg({ ...gp, funds: [...(gp.funds||[]), { ...d, id: uid() }] });
+          onAddFund={(orgId, created) => {
+            const orgExists = (organizations || []).some(o => o.id === orgId);
+            if (orgExists && created) {
+              // Existing org: prepend the new fund directly — no re-fetch needed
+              setOrganizations(orgs => orgs.map(o =>
+                o.id === orgId ? { ...o, funds: [created, ...(o.funds || [])] } : o
+              ));
+            } else {
+              // New org just created (Preqin GP or free-typed name): fetch and prepend
+              loadOrganization(orgId)
+                .then(fresh => { if (fresh) setOrganizations(orgs => [fresh, ...orgs.filter(o => o.id !== fresh.id)]); })
+                .catch(() => {});
+            }
           }}
           onLogMeeting={(gp, fundId, m) => {
             if (m) {
@@ -628,11 +801,20 @@ export default function App() {
 
   // Sub-views
   if (view === "settings") return wrap(<><SettingsView onBack={goHome} />{renderOverlays()}</>);
+  if (view === "people") return wrap(<><PeopleView onBack={goHome} />{renderOverlays()}</>);
   if (view === "dashboard") return wrap(<><DashboardView gps={gps} pipeline={pipeline} todos={todos} owners={allOwners} onBack={goHome} onAddTodo={handleAddTodo} onToggleTodo={handleToggleTodo} onDeleteTodo={handleDeleteTodo} onMeetingClick={handleMeetingClick} onFundClick={handleFundClick} />{renderOverlays()}</>);
   if (view === "dataReview") return wrap(<>
     <DataReviewView
       onBack={goHome}
       displayOrgs={displayOrgs}
+      onFundLinked={(fundId, preqinFundId, preqinSeriesId) => {
+        setOrganizations(orgs => orgs.map(o => ({
+          ...o,
+          funds: (o.funds || []).map(f => f.id === fundId
+            ? { ...f, preqin_fund_id: preqinFundId, preqin_series_id: preqinSeriesId }
+            : f),
+        })));
+      }}
       onEntityClick={(entityType, entity) => {
         if (entityType === "fund") {
           const gp = displayOrgs.find(o => (o.funds||[]).some(f => f.id === entity.id));
@@ -642,6 +824,17 @@ export default function App() {
         }
         setView("home");
       }}
+    />
+    {renderOverlays()}
+  </>);
+  if (view === "pipelineTable") return wrap(<>
+    <PipelineView
+      organizations={displayOrgs}
+      onFundClick={(fund, gp) => { handleFundClick(fund, gp); }}
+      onGpClick={handleGpClick}
+      onUpdateFund={handleUpdateFundPipeline}
+      onMeetingClick={handleMeetingClick}
+      owners={allOwners}
     />
     {renderOverlays()}
   </>);

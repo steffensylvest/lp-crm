@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { btnGhost, btnDanger, btnPrimary } from '../theme.js';
 import { fmt } from '../utils.js';
 import { Overlay, OverlayHeader } from './Overlay.jsx';
-import { updatePerson } from '../api.js';
+import { updatePerson, loadPeople, mergePeople } from '../api.js';
 
 // ── PersonForm ─────────────────────────────────────────────────────────────────
 
@@ -49,12 +49,129 @@ function PersonForm({ initial, onSave, onClose }) {
   );
 }
 
+// ── MergePersonPanel ───────────────────────────────────────────────────────────
+// Inline panel in PersonDetailOverlay to merge with another person
+
+function MergePersonPanel({ person, onMerged, onClose }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null); // person to merge into this one
+  const [keepSelf, setKeepSelf] = useState(true); // true = keep current person, false = keep other
+  const [merging, setMerging] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    clearTimeout(timerRef.current);
+    if (query.trim().length < 2) { setResults([]); return; }
+    timerRef.current = setTimeout(() => {
+      setLoading(true);
+      loadPeople({ q: query, limit: 10 })
+        .then(r => setResults((r ?? []).filter(p => p.id !== person.id)))
+        .catch(() => setResults([]))
+        .finally(() => setLoading(false));
+    }, 300);
+    return () => clearTimeout(timerRef.current);
+  }, [query, person.id]);
+
+  const handleMerge = async () => {
+    if (!selected) return;
+    setMerging(true);
+    try {
+      const keepId = keepSelf ? person.id : selected.id;
+      const mergeId = keepSelf ? selected.id : person.id;
+      await mergePeople(keepId, [mergeId]);
+      onMerged(keepId, mergeId);
+    } catch (err) {
+      console.error("Merge failed:", err);
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  const fullName = p => [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unknown";
+  const inp = { background: "var(--input)", border: "1px solid var(--border)", borderRadius: "6px", color: "var(--tx1)", padding: "0.4rem 0.7rem", fontSize: "0.825rem", width: "100%", boxSizing: "border-box" };
+
+  return (
+    <div style={{ background: "var(--subtle)", border: "1px solid var(--border)", borderRadius: "10px", padding: "1rem", marginTop: "1rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        <div style={{ color: "var(--tx3)", fontWeight: 600, fontSize: "0.8125rem", flex: 1 }}>Merge with another person</div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--tx4)", cursor: "pointer", fontSize: "0.85rem", padding: "0.1rem 0.3rem" }}>✕</button>
+      </div>
+
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setSelected(null); }}
+        placeholder="Search by name…"
+        style={inp}
+        autoFocus
+      />
+
+      {loading && <div style={{ color: "var(--tx5)", fontSize: "0.75rem", marginTop: "0.4rem" }}>Searching…</div>}
+
+      {!selected && results.length > 0 && (
+        <div style={{ border: "1px solid var(--border)", borderRadius: "6px", overflow: "hidden", marginTop: "0.4rem" }}>
+          {results.map((p, i) => (
+            <div key={p.id} onClick={() => { setSelected(p); setQuery(fullName(p)); setResults([]); }}
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.45rem 0.75rem",
+                       borderBottom: i < results.length - 1 ? "1px solid var(--border)" : "none",
+                       cursor: "pointer", background: "transparent" }}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span style={{ color: "var(--tx1)", fontSize: "0.8rem", fontWeight: 500 }}>{fullName(p)}</span>
+              {p.title && <span style={{ color: "var(--tx4)", fontSize: "0.72rem" }}>· {p.title}</span>}
+              {p.email && <span style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>{p.email}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div style={{ marginTop: "0.75rem" }}>
+          {/* Side-by-side comparison */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginBottom: "0.75rem" }}>
+            {[
+              { p: person, label: "Current", isSelf: true },
+              { p: selected, label: "Other", isSelf: false },
+            ].map(({ p: pr, label, isSelf }) => {
+              const isKeep = keepSelf === isSelf;
+              return (
+                <div key={label} onClick={() => setKeepSelf(isSelf)}
+                  style={{ border: `2px solid ${isKeep ? "#3b82f6" : "var(--border)"}`, borderRadius: "8px",
+                           padding: "0.65rem 0.8rem", cursor: "pointer",
+                           background: isKeep ? "color-mix(in srgb, #3b82f6 6%, var(--card))" : "var(--card)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.3rem" }}>
+                    <div style={{ color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+                    {isKeep && <span style={{ color: "#3b82f6", fontSize: "0.65rem", fontWeight: 700 }}>KEEP</span>}
+                  </div>
+                  <div style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.825rem" }}>{fullName(pr)}</div>
+                  {pr.title && <div style={{ color: "var(--tx4)", fontSize: "0.72rem" }}>{pr.title}</div>}
+                  {pr.email && <div style={{ color: "var(--tx5)", fontSize: "0.7rem" }}>{pr.email}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <button onClick={() => { setSelected(null); setQuery(""); }} style={btnGhost}>Cancel</button>
+            <button onClick={handleMerge} disabled={merging}
+              style={{ background: merging ? "var(--subtle)" : "#ef4444", border: "none", borderRadius: "6px", color: merging ? "var(--tx4)" : "#fff",
+                       padding: "0.4rem 1rem", fontSize: "0.825rem", fontWeight: 600, cursor: merging ? "wait" : "pointer" }}>
+              {merging ? "Merging…" : "Merge →"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PersonDetailOverlay ────────────────────────────────────────────────────────
 
-export function PersonDetailOverlay({ orgPerson, orgName, onClose, onUpdated, zIndex = 1050 }) {
+export function PersonDetailOverlay({ orgPerson, orgName, onClose, onUpdated, onMerged, zIndex = 1050 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [person, setPerson] = useState(orgPerson.person ?? orgPerson);
+  const [showMerge, setShowMerge] = useState(false);
   const role = orgPerson.role ?? null;
 
   const handleSave = async (d) => {
@@ -69,6 +186,12 @@ export function PersonDetailOverlay({ orgPerson, orgName, onClose, onUpdated, zI
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleMerged = (keepId, mergeId) => {
+    setShowMerge(false);
+    onMerged && onMerged(keepId, mergeId);
+    onClose();
   };
 
   const fullName = [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown";
@@ -90,7 +213,10 @@ export function PersonDetailOverlay({ orgPerson, orgName, onClose, onUpdated, zI
         title={fullName}
         subtitle={subtitle}
         onClose={onClose}
-        actions={<button onClick={() => setEditing(true)} style={btnGhost}>Edit</button>}
+        actions={<>
+          <button onClick={() => setShowMerge(v => !v)} style={{ ...btnGhost, fontSize: "0.75rem" }}>Merge…</button>
+          <button onClick={() => setEditing(true)} style={btnGhost}>Edit</button>
+        </>}
       />
       <div style={{ padding: "1.5rem" }}>
         {/* Detail cards grid */}
@@ -137,8 +263,135 @@ export function PersonDetailOverlay({ orgPerson, orgName, onClose, onUpdated, zI
             Primary contact
           </div>
         )}
+
+        {/* Merge panel */}
+        {showMerge && (
+          <MergePersonPanel
+            person={person}
+            onMerged={handleMerged}
+            onClose={() => setShowMerge(false)}
+          />
+        )}
       </div>
     </Overlay>
+  );
+}
+
+// ── PeopleView ─────────────────────────────────────────────────────────────────
+// People Book — searchable table of all people, editable inline
+
+export function PeopleView({ onBack, zIndex = 1000 }) {
+  const [people, setPeople] = useState(null);
+  const [search, setSearch] = useState("");
+  const [selectedPerson, setSelectedPerson] = useState(null);
+
+  useEffect(() => {
+    loadPeople()
+      .then(data => setPeople(data ?? []))
+      .catch(() => setPeople([]));
+  }, []);
+
+  const filtered = (people ?? []).filter(p => {
+    const s = search.toLowerCase();
+    if (!s) return true;
+    const name = `${p.first_name ?? ""} ${p.last_name ?? ""}`.toLowerCase();
+    return name.includes(s) || (p.email ?? "").toLowerCase().includes(s) || (p.title ?? "").toLowerCase().includes(s);
+  });
+
+  // Sort by last name, then first name
+  const sorted = [...filtered].sort((a, b) => {
+    const ln = (a.last_name ?? "").localeCompare(b.last_name ?? "");
+    if (ln !== 0) return ln;
+    return (a.first_name ?? "").localeCompare(b.first_name ?? "");
+  });
+
+  const handleMerged = (keepId, mergeId) => {
+    setPeople(prev => (prev ?? []).filter(p => p.id !== mergeId));
+    setSelectedPerson(null);
+  };
+
+  if (selectedPerson) {
+    return (
+      <PersonDetailOverlay
+        orgPerson={selectedPerson}
+        orgName={selectedPerson.org_name ?? null}
+        zIndex={zIndex + 50}
+        onClose={() => setSelectedPerson(null)}
+        onUpdated={(updated) => {
+          setPeople(prev => (prev ?? []).map(p => p.id === updated.id ? { ...p, ...updated } : p));
+          setSelectedPerson(null);
+        }}
+        onMerged={handleMerged}
+      />
+    );
+  }
+
+  const col = (label, w) => (
+    <div style={{ flex: `0 0 ${w}`, minWidth: 0, color: "var(--tx4)", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+  );
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
+        <button onClick={onBack} style={btnGhost}>← Back</button>
+        <div style={{ flex: 1 }}>
+          <h2 style={{ margin: 0, color: "var(--tx1)", fontSize: "1.3rem", fontWeight: 700 }}>People Book</h2>
+          <div style={{ color: "var(--tx4)", fontSize: "0.8125rem" }}>
+            {people === null ? "Loading…" : `${sorted.length} contact${sorted.length !== 1 ? "s" : ""}`}
+          </div>
+        </div>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by name, email, title…"
+          style={{ background: "var(--input)", border: "1px solid var(--border)", borderRadius: "8px", color: "var(--tx1)", padding: "0.45rem 0.85rem", fontSize: "0.825rem", width: "240px", outline: "none" }}
+        />
+      </div>
+
+      {people === null && <div style={{ color: "var(--tx5)", textAlign: "center", padding: "3rem" }}>Loading…</div>}
+      {people !== null && sorted.length === 0 && (
+        <div style={{ color: "var(--tx4)", textAlign: "center", padding: "3rem" }}>No contacts found.</div>
+      )}
+
+      {people !== null && sorted.length > 0 && (
+        <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" }}>
+          {/* Table header */}
+          <div style={{ display: "flex", gap: "0.75rem", padding: "0.5rem 1rem", background: "var(--subtle)", borderBottom: "1px solid var(--border)" }}>
+            {col("Name", "200px")}
+            {col("Title", "160px")}
+            {col("Org", "160px")}
+            {col("Email", "200px")}
+            {col("Mobile", "130px")}
+          </div>
+          {/* Rows */}
+          {sorted.map((p, i) => {
+            const fullName = [p.first_name, p.last_name].filter(Boolean).join(" ") || "—";
+            return (
+              <div key={p.id} onClick={() => setSelectedPerson(p)}
+                style={{ display: "flex", gap: "0.75rem", alignItems: "center", padding: "0.5rem 1rem",
+                         borderBottom: i < sorted.length - 1 ? "1px solid var(--border)" : "none",
+                         cursor: "pointer", background: "transparent" }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--hover)"}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <div style={{ flex: "0 0 200px", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div style={{ width: "26px", height: "26px", borderRadius: "50%", background: "var(--subtle)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "var(--tx3)", fontSize: "0.62rem", fontWeight: 700 }}>
+                      {[p.first_name?.[0], p.last_name?.[0]].filter(Boolean).join("") || "?"}
+                    </div>
+                    <span style={{ color: "var(--tx1)", fontWeight: 600, fontSize: "0.825rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fullName}</span>
+                  </div>
+                </div>
+                <div style={{ flex: "0 0 160px", minWidth: 0, color: "var(--tx3)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || "—"}</div>
+                <div style={{ flex: "0 0 160px", minWidth: 0, color: "var(--tx4)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.org_name || "—"}</div>
+                <div style={{ flex: "0 0 200px", minWidth: 0, color: "var(--tx4)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.email || "—"}</div>
+                <div style={{ flex: "0 0 130px", minWidth: 0, color: "var(--tx5)", fontSize: "0.78rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.mobile || p.phone || "—"}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

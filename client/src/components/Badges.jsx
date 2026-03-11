@@ -10,7 +10,7 @@ export function ScoreBadge({ score, item, size = "sm" }) {
   const bg    = item?.bg_color ? item.bg_color : `var(--sb-${code}-bg)`;
   const color = item?.color    ? item.color    : `var(--sb-${code}-c)`;
   const border = item?.color   ? `1px solid ${item.color}40` : `1px solid var(--sb-${code}-bd)`;
-  return <span style={{ background: bg, color, border, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>{label}</span>;
+  return <span style={{ background: bg, color, border, borderRadius: "4px", padding: size === "lg" ? "0.3rem 0.8rem" : "0.1rem 0.45rem", fontSize: size === "lg" ? "0.95rem" : "0.72rem", fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.05em", whiteSpace: "nowrap" }} title={label}>{code}</span>;
 }
 // Exported so StatusPicker and other components can reuse the same logic
 export function getStatusStyle(status, settings, mode) {
